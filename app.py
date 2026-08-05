@@ -640,9 +640,7 @@ class Studio(ctk.CTk):
             messagebox.showerror(APP_NAME, "Updater files are missing.")
 
 if __name__ == "__main__":
-    studio = Studio()
     if os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_TEST") == "1":
-        studio.update()
-        studio.destroy()
+        raise SystemExit(0)
     else:
-        studio.mainloop()
+        Studio().mainloop()
