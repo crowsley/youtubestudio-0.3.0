@@ -6,8 +6,8 @@ This project publishes `YouTube-AI-Studio-Setup.exe` when a version tag is pushe
 2. Ensure the version in `version.json` and `installer.iss` matches the tag.
 3. Push the release tag:
 
-       git tag v0.5.1
-       git push origin v0.5.1
+       git tag v0.5.2
+       git push origin v0.5.2
 
 GitHub Actions builds the standalone app, creates the installer and attaches it to the release.
 

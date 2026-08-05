@@ -953,7 +953,7 @@ class Studio(ctk.CTk):
         self.image_prompt.insert("1.0", scene.get("image_prompt", ""))
         self.voice_badge.configure(text=scene.get("audioStatus", "Not generated"))
         if scene.get("audioPath") and Path(scene["audioPath"]).is_file():
-            self.audio_details.configure(text=f"{Path(scene['audioPath']).name} — {float(scene.get('audioDuration', 0)):.2f}s — {scene.get('audioFileSize', 0)} bytes")
+            self.load_audio(Path(scene["audioPath"]))
 
     def clear_scene_fields(self) -> None:
         for widget in [self.scene_narration, self.kling_prompt, self.image_prompt]:

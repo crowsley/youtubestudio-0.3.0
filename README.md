@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.5.1 - Phase 2 Narration
+## Version 0.5.2 - Phase 2 Narration
 
 - Project, script and scene management
 - Local Kokoro narration generation
