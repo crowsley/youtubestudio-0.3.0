@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import urllib.request
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
 
 def read_json(path: Path) -> dict:
@@ -55,4 +57,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if os.environ.get("YOUTUBE_AI_STUDIO_UPDATER_SMOKE_TEST") == "1":
+        marker = os.environ["YOUTUBE_AI_STUDIO_UPDATER_SMOKE_MARKER"]
+        Path(marker).write_text(json.dumps({"version": read_json(APP_DIR / "version.json")["version"], "config": read_json(APP_DIR / "update_config.json")["github_repo"]}), encoding="utf-8")
+    else:
+        raise SystemExit(main())

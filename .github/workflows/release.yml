@@ -45,6 +45,17 @@ jobs:
             if (-not $process.HasExited) { $process.Kill() }
             throw "Packaged application did not complete dependency imports."
           }
+      - name: Smoke test packaged updater paths
+        shell: pwsh
+        run: |
+          $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_TEST = "1"
+          $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_MARKER = "$env:RUNNER_TEMP\youtube-ai-studio-updater-smoke.json"
+          & .\dist\YouTubeAIStudio\YouTubeAIStudioUpdater.exe
+          $result = Get-Content $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_MARKER | ConvertFrom-Json
+          $expected = (Get-Content .\version.json | ConvertFrom-Json).version
+          if ($result.version -ne $expected -or $result.config -ne "youtubestudio-0.3.0") {
+            throw "Packaged updater could not read installed version/config files."
+          }
       - name: Sign installer
         if: ${{ env.CERTIFICATE_BASE64 != '' }}
         shell: pwsh
