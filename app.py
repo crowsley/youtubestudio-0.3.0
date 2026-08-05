@@ -21,7 +21,13 @@ if sys.stdout is None:
 import customtkinter as ctk
 import numpy as np
 import soundfile as sf
-from kokoro import KPipeline
+try:
+    from kokoro import KPipeline
+except Exception:
+    smoke_marker = os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_MARKER")
+    if smoke_marker:
+        Path(f"{smoke_marker}.error").write_text(traceback.format_exc(), encoding="utf-8")
+    raise
 
 APP_NAME = "YouTube AI Studio"
 BASE_DIR = Path(__file__).resolve().parent
