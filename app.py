@@ -1246,10 +1246,16 @@ class Studio(ctk.CTk):
     def check_updates(self) -> None:
         updater_exe = BASE_DIR / "YouTubeAIStudioUpdater.exe"
         updater_script = BASE_DIR / "check_for_updates.bat"
+        if not messagebox.askyesno(APP_NAME, "Check GitHub for an update? If one is available, the project will be saved and the app will close so Windows can replace its files."):
+            return
+        if self.current_project_path:
+            self.save_project()
         if updater_exe.exists():
             subprocess.Popen([str(updater_exe)], cwd=BASE_DIR)
+            self.after(750, self.destroy)
         elif updater_script.exists():
             subprocess.Popen(["cmd.exe", "/c", "start", "", str(updater_script)], cwd=BASE_DIR)
+            self.after(750, self.destroy)
         else:
             messagebox.showerror(APP_NAME, "Updater files are missing.")
 

@@ -17,6 +17,10 @@ def version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.removeprefix("v").split("."))
 
 
+def installer_command(path: Path) -> list[str]:
+    return [str(path), "/VERYSILENT", "/NORESTART"]
+
+
 def request_json(url: str) -> dict:
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "YouTube-AI-Studio-Updater"})
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -42,8 +46,8 @@ def main() -> int:
         request = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "YouTube-AI-Studio-Updater"})
         with urllib.request.urlopen(request, timeout=180) as response:
             installer.write_bytes(response.read())
-        subprocess.Popen([str(installer), "/SILENT", "/CLOSEAPPLICATIONS"])
-        print("The installer has started. Close YouTube AI Studio when prompted.")
+        subprocess.Popen(installer_command(installer))
+        print("The app was saved and closed. The update installer has started.")
         return 0
     except Exception as exc:
         input(f"Update failed: {exc}\nPress Enter to close.")
