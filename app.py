@@ -26,7 +26,7 @@ from narration import KokoroNarrationProvider, WindowsAudioPlayer, combine_wavs,
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
 APP_NAME = "YouTube AI Studio"
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", BASE_DIR)) / APP_NAME
 PROJECTS_DIR = USER_DATA_DIR / "projects"
 OUTPUT_DIR = USER_DATA_DIR / "output"
@@ -1257,7 +1257,7 @@ if __name__ == "__main__":
     if os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_TEST") == "1":
         marker = os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_MARKER")
         if marker:
-            Path(marker).write_text("ok", encoding="utf-8")
+            Path(marker).write_text(json.dumps({"version": Studio.load_version(None), "updater": (BASE_DIR / "YouTubeAIStudioUpdater.exe").is_file()}), encoding="utf-8")
         raise SystemExit(0)
     elif os.environ.get("YOUTUBE_AI_STUDIO_UI_SMOKE_TEST") == "1":
         studio = Studio()
