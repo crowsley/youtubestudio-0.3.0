@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.3.2
+## Version 0.4.0 - Phase 1 Connections
 
 - Project, script and scene management
 - Local Kokoro narration generation
@@ -12,6 +12,10 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 - Start Menu, optional desktop shortcut and uninstaller
 - Projects stored safely in `%LOCALAPPDATA%\YouTube AI Studio`
 - Installer-based updates from GitHub Releases
+- Persistent Settings and first-launch setup report
+- Real Kokoro WAV, ComfyUI image and FFmpeg MP4 connection tests
+- Manual/API Kling configuration with secure credential storage
+- Diagnostics with secret redaction and visible failure reasons
 
 ## Development
 

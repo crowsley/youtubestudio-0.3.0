@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
 import threading
-import traceback
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -21,13 +22,8 @@ if sys.stdout is None:
 import customtkinter as ctk
 import numpy as np
 import soundfile as sf
-try:
-    from kokoro import KPipeline
-except Exception:
-    smoke_marker = os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_MARKER")
-    if smoke_marker:
-        Path(f"{smoke_marker}.error").write_text(traceback.format_exc(), encoding="utf-8")
-    raise
+from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
+from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
 APP_NAME = "YouTube AI Studio"
 BASE_DIR = Path(__file__).resolve().parent
@@ -77,11 +73,26 @@ class Studio(ctk.CTk):
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+        self.settings_store = SettingsStore()
+        self.settings = self.settings_store.load()
+        self.credentials = CredentialStore()
+        self.setting_entries: dict[str, ctk.CTkEntry] = {}
+        self.setting_vars: dict[str, object] = {}
+        self.connection_status: dict[str, ctk.CTkLabel] = {}
+        self.test_logs: dict[str, str] = {}
         self.current_project_path: Path | None = None
-        self.pipeline_cache: dict[str, KPipeline] = {}
+        self.pipeline_cache: dict[str, object] = {}
         self.generating = False
 
         self.build_ui()
+        self.schedule_auto_save()
+        if self.settings["general"].get("check_updates_on_startup"):
+            self.after(1500, self.check_updates)
+        last_project = self.settings["general"].get("last_project")
+        if self.settings["general"].get("open_last_project") and last_project:
+            self.after(500, lambda: self.load_project_path(Path(last_project), quiet=True))
+        if not self.settings_store.path.exists():
+            self.after(300, self.show_setup_wizard)
 
     def load_version(self) -> str:
         try:
@@ -162,6 +173,7 @@ class Studio(ctk.CTk):
         self.create_voice_tab()
         self.create_prompts_tab()
         self.create_export_tab()
+        self.create_settings_tab()
 
     def create_dashboard_tab(self) -> None:
         tab = self.tabs.add("Dashboard")
@@ -364,9 +376,395 @@ class Studio(ctk.CTk):
         self.export_status = ctk.CTkLabel(tab, text="")
         self.export_status.grid(row=4, column=0, padx=16, pady=16, sticky="w")
 
+    def create_settings_tab(self) -> None:
+        tab = self.tabs.add("Settings")
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+        page = ctk.CTkScrollableFrame(tab)
+        page.grid(row=0, column=0, padx=8, pady=8, sticky="nsew")
+        page.grid_columnconfigure(0, weight=1)
+
+        general = self._settings_section(page, "General", 0, "Application paths and startup behaviour")
+        for row, (label, key) in enumerate([
+            ("Application data directory", "general.app_data_dir"),
+            ("Default project directory", "general.project_dir"),
+            ("Logs directory", "general.logs_dir"),
+            ("Temporary files directory", "general.temp_dir"),
+        ], 1):
+            self._setting_entry(general, row, label, key, browse="directory")
+        for column, (label, key) in enumerate([
+            ("Auto-save", "general.auto_save"),
+            ("Open last project", "general.open_last_project"),
+            ("Check updates on startup", "general.check_updates_on_startup"),
+        ]):
+            self._setting_check(general, 5, column, label, key)
+        self._setting_entry(general, 6, "Auto-save interval (seconds)", "general.auto_save_interval")
+
+        kokoro = self._settings_section(page, "Kokoro", 1, "A Connected badge requires a real playable WAV")
+        self._status_badge(kokoro, "kokoro")
+        self._setting_entry(kokoro, 1, "Installation directory", "kokoro.install_dir", browse="directory")
+        self._setting_entry(kokoro, 2, "Python executable", "kokoro.python", browse="file")
+        self._setting_entry(kokoro, 3, "Model repository", "kokoro.model_repo")
+        self._setting_entry(kokoro, 4, "Language code", "kokoro.language")
+        self._setting_entry(kokoro, 5, "Default voice", "kokoro.voice")
+        self._setting_entry(kokoro, 6, "Speech speed", "kokoro.speed")
+        self._setting_entry(kokoro, 7, "Generation timeout", "kokoro.timeout")
+        self._setting_entry(kokoro, 8, "Hugging Face token", "secret.huggingface", secret=True)
+        self._button_row(kokoro, 9, [
+            ("Auto-detect", self.auto_detect_kokoro),
+            ("Test Python", self.test_python_connection),
+            ("Test Kokoro", lambda: self.run_kokoro_test(False)),
+            ("Generate Test Voice", lambda: self.run_kokoro_test(True)),
+            ("Open folder", lambda: self.open_setting_path("kokoro.install_dir")),
+            ("View test log", lambda: self.view_test_log("kokoro")),
+        ])
+
+        comfy = self._settings_section(page, "ComfyUI", 2, "Connected requires a successful generated image")
+        self._status_badge(comfy, "comfyui")
+        fields = [
+            ("Base URL", "comfyui.base_url", None), ("Workflow JSON", "comfyui.workflow_file", "file"),
+            ("Positive prompt node", "comfyui.positive_node", None), ("Negative prompt node", "comfyui.negative_node", None),
+            ("Seed node", "comfyui.seed_node", None), ("Width node", "comfyui.width_node", None),
+            ("Height node", "comfyui.height_node", None), ("Output node", "comfyui.output_node", None),
+            ("Request timeout", "comfyui.timeout", None), ("Output directory", "comfyui.output_dir", "directory"),
+        ]
+        for row, (label, key, browse) in enumerate(fields, 1):
+            self._setting_entry(comfy, row, label, key, browse=browse)
+        self._button_row(comfy, 11, [
+            ("Test server", lambda: self.run_comfyui_test(False)),
+            ("Validate workflow", self.validate_comfyui_workflow),
+            ("Generate Test Image", lambda: self.run_comfyui_test(True)),
+            ("Open ComfyUI", lambda: webbrowser.open(self._entry_value("comfyui.base_url"))),
+            ("Open output", lambda: self.open_setting_path("comfyui.output_dir")),
+            ("View test log", lambda: self.view_test_log("comfyui")),
+        ])
+
+        kling = self._settings_section(page, "Kling", 3, "Manual Import never reports Connected")
+        self._status_badge(kling, "kling", "Manual mode")
+        self._setting_option(kling, 1, "Mode", "kling.mode", ["Manual Import", "Official API"])
+        for row, (label, key, secret) in enumerate([
+            ("Kling project URL", "kling.project_url", False), ("Download/import folder", "kling.import_dir", False),
+            ("API base URL", "kling.api_base_url", False), ("API key", "secret.kling_api_key", True),
+            ("Workspace identifier", "kling.workspace", False), ("Model", "kling.model", False),
+            ("Default duration", "kling.duration", False), ("Aspect ratio", "kling.aspect_ratio", False),
+        ], 2):
+            self._setting_entry(kling, row, label, key, secret=secret, browse="directory" if key == "kling.import_dir" else None)
+        self._button_row(kling, 10, [
+            ("Open Kling website", lambda: webbrowser.open(self._entry_value("kling.project_url"))),
+            ("Test API", self.run_kling_test),
+            ("Open import folder", lambda: self.open_setting_path("kling.import_dir")),
+        ])
+
+        ffmpeg = self._settings_section(page, "FFmpeg", 4, "Connected requires creating and probing a real MP4")
+        self._status_badge(ffmpeg, "ffmpeg")
+        self._setting_entry(ffmpeg, 1, "FFmpeg executable", "ffmpeg.ffmpeg", browse="file")
+        self._setting_entry(ffmpeg, 2, "FFprobe executable", "ffmpeg.ffprobe", browse="file")
+        self._button_row(ffmpeg, 3, [
+            ("Auto-detect", self.auto_detect_ffmpeg),
+            ("Test FFmpeg", self.run_ffmpeg_test),
+            ("Open installation folder", lambda: self.open_setting_parent("ffmpeg.ffmpeg")),
+            ("View test log", lambda: self.view_test_log("ffmpeg")),
+        ])
+
+        output = self._settings_section(page, "Output", 5, "Production defaults")
+        output_fields = [
+            ("Project root", "output.project_root", "directory"), ("Export directory", "output.export_dir", "directory"),
+            ("Cache directory", "output.cache_dir", "directory"), ("Temporary directory", "output.temp_dir", "directory"),
+            ("Resolution", "output.resolution", None), ("Frame rate", "output.frame_rate", None),
+            ("Transition duration", "output.transition_duration", None), ("Video codec", "output.video_codec", None),
+            ("Hardware encoder", "output.hardware_encoder", None), ("Audio codec", "output.audio_codec", None),
+            ("Output quality", "output.quality", None), ("Overwrite behaviour", "output.overwrite", None),
+        ]
+        for row, (label, key, browse) in enumerate(output_fields, 1):
+            self._setting_entry(output, row, label, key, browse=browse)
+
+        diagnostics = self._settings_section(page, "Diagnostics", 6, "Truthful service status and redacted logs")
+        self.diagnostics_box = ctk.CTkTextbox(diagnostics, height=180)
+        self.diagnostics_box.grid(row=1, column=0, columnspan=3, padx=10, pady=8, sticky="ew")
+        self._button_row(diagnostics, 2, [
+            ("Save settings", self.save_settings_ui),
+            ("Run all diagnostics", self.run_all_diagnostics),
+            ("Copy report", self.copy_diagnostics),
+            ("Open logs folder", lambda: self.open_setting_path("general.logs_dir")),
+            ("Clear temporary files", self.clear_temporary_files),
+        ])
+        self.refresh_diagnostics()
+
+    def _settings_section(self, parent, title: str, row: int, description: str):
+        frame = ctk.CTkFrame(parent)
+        frame.grid(row=row, column=0, padx=8, pady=8, sticky="ew")
+        frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=19, weight="bold")).grid(row=0, column=0, padx=12, pady=(12, 2), sticky="w")
+        ctk.CTkLabel(frame, text=description, text_color=("gray40", "gray70")).grid(row=0, column=1, padx=8, pady=(12, 2), sticky="w")
+        return frame
+
+    def _setting_entry(self, parent, row: int, label: str, key: str, secret: bool = False, browse: str | None = None) -> None:
+        ctk.CTkLabel(parent, text=label).grid(row=row, column=0, padx=12, pady=4, sticky="w")
+        entry = ctk.CTkEntry(parent, show="*" if secret else "")
+        value = ""
+        if secret:
+            try:
+                value = self.credentials.get(key.split(".", 1)[1])
+            except Exception:
+                pass
+        else:
+            section, name = key.split(".", 1)
+            value = str(self.settings[section].get(name, ""))
+        entry.insert(0, value)
+        entry.grid(row=row, column=1, padx=8, pady=4, sticky="ew")
+        self.setting_entries[key] = entry
+        if browse:
+            ctk.CTkButton(parent, text="Browse", width=75, command=lambda k=key, mode=browse: self.browse_setting(k, mode)).grid(row=row, column=2, padx=(0, 10), pady=4)
+
+    def _setting_option(self, parent, row: int, label: str, key: str, values: list[str]) -> None:
+        ctk.CTkLabel(parent, text=label).grid(row=row, column=0, padx=12, pady=4, sticky="w")
+        section, name = key.split(".", 1)
+        variable = ctk.StringVar(value=str(self.settings[section].get(name, values[0])))
+        ctk.CTkOptionMenu(parent, values=values, variable=variable).grid(row=row, column=1, padx=8, pady=4, sticky="w")
+        self.setting_vars[key] = variable
+
+    def _setting_check(self, parent, row: int, column: int, label: str, key: str) -> None:
+        section, name = key.split(".", 1)
+        variable = ctk.BooleanVar(value=bool(self.settings[section].get(name)))
+        ctk.CTkCheckBox(parent, text=label, variable=variable).grid(row=row, column=column, padx=12, pady=6, sticky="w")
+        self.setting_vars[key] = variable
+
+    def _status_badge(self, parent, name: str, initial: str = "Not configured") -> None:
+        badge = ctk.CTkLabel(parent, text=initial, corner_radius=8, fg_color=("gray75", "gray30"), width=120)
+        badge.grid(row=0, column=2, padx=10, pady=(12, 2), sticky="e")
+        self.connection_status[name] = badge
+
+    def _button_row(self, parent, row: int, buttons: list[tuple[str, object]]) -> None:
+        bar = ctk.CTkFrame(parent, fg_color="transparent")
+        bar.grid(row=row, column=0, columnspan=3, padx=8, pady=10, sticky="ew")
+        for label, command in buttons:
+            ctk.CTkButton(bar, text=label, command=command, width=120).pack(side="left", padx=4)
+
+    def _entry_value(self, key: str) -> str:
+        return self.setting_entries[key].get().strip()
+
+    def browse_setting(self, key: str, mode: str) -> None:
+        selected = filedialog.askdirectory() if mode == "directory" else filedialog.askopenfilename()
+        if selected:
+            entry = self.setting_entries[key]
+            entry.delete(0, "end")
+            entry.insert(0, selected)
+
+    def save_settings_ui(self) -> bool:
+        errors = []
+        for key, entry in self.setting_entries.items():
+            if key.startswith("secret."):
+                name = key.split(".", 1)[1]
+                try:
+                    if entry.get():
+                        self.credentials.set(name, entry.get())
+                except Exception as exc:
+                    errors.append(f"Could not store {name} securely: {exc}")
+                continue
+            section, name = key.split(".", 1)
+            value: object = entry.get().strip()
+            original = self.settings[section].get(name)
+            try:
+                if isinstance(original, bool): value = str(value).lower() in {"1", "true", "yes"}
+                elif isinstance(original, int): value = int(value)
+                elif isinstance(original, float): value = float(value)
+            except ValueError:
+                errors.append(f"Invalid value for {key}: {value}")
+            self.settings[section][name] = value
+        for key, variable in self.setting_vars.items():
+            section, name = key.split(".", 1)
+            self.settings[section][name] = variable.get()
+        for key in ("general.app_data_dir", "general.project_dir", "general.logs_dir", "general.temp_dir", "output.project_root", "output.export_dir", "output.cache_dir", "output.temp_dir"):
+            section, name = key.split(".", 1)
+            ok, reason = validate_directory(str(self.settings[section][name]))
+            if not ok: errors.append(reason)
+        if errors:
+            messagebox.showerror(APP_NAME, "\n".join(errors))
+            return False
+        self.settings_store.save(self.settings)
+        self.status.configure(text="Settings saved")
+        self.refresh_diagnostics()
+        return True
+
+    def set_connection_status(self, name: str, state: str, reason: str = "") -> None:
+        colors = {"Connected": "#238636", "Failed": "#b42318", "Checking": "#9a6700", "Manual mode": "#4b5563", "Not configured": "#4b5563"}
+        self.connection_status[name].configure(text=state, fg_color=colors.get(state, "#4b5563"))
+        if reason:
+            self.test_logs[name] = reason
+
+    def run_background_test(self, name: str, function) -> None:
+        self.set_connection_status(name, "Checking")
+        def worker() -> None:
+            try:
+                result = function()
+            except Exception as exc:
+                result = {"ok": False, "reason": str(exc)}
+            self.after(0, lambda: self.finish_connection_test(name, result))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_connection_test(self, name: str, result: dict) -> None:
+        state = "Connected" if result.get("connected", result.get("ok")) else "Failed"
+        if name == "kling" and self.setting_vars["kling.mode"].get() == "Manual Import":
+            state = "Manual mode"
+        detail = redact(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        self.set_connection_status(name, state, detail)
+        self.settings.setdefault("status", {})[name] = {"state": state, "reason": result.get("reason", ""), "checked_at": datetime.now().isoformat(timespec="seconds")}
+        self.settings_store.save(self.settings)
+        self.refresh_diagnostics()
+        if not result.get("ok"):
+            messagebox.showerror(f"{name.title()} test", result.get("reason", "Test failed"))
+        else:
+            messagebox.showinfo(f"{name.title()} test", result.get("reason", "Connected"))
+
+    def auto_detect_kokoro(self) -> None:
+        install = self._entry_value("kokoro.install_dir") or str(Path.home() / "Downloads" / "Kokoro-TTS")
+        python = detect_python(install)
+        for key, value in (("kokoro.install_dir", install), ("kokoro.python", python)):
+            entry = self.setting_entries[key]
+            entry.delete(0, "end")
+            entry.insert(0, value)
+        self.set_connection_status("kokoro", "Not configured", f"Detected Python: {python or 'none'}; generate a test voice to connect.")
+
+    def test_python_connection(self) -> None:
+        self.save_settings_ui()
+        config = self.settings["kokoro"]
+        def test() -> dict:
+            from connections import ProcessRunner
+            result = ProcessRunner().run([config["python"], "--version"], 20)
+            return {"ok": result.ok, "connected": False, "reason": ((result.stdout or result.stderr).strip() + "; generate a playable test voice to connect."), "command": result.command, "exit_code": result.exit_code, "stdout": result.stdout, "stderr": result.stderr}
+        self.run_background_test("kokoro", test)
+
+    def run_kokoro_test(self, generate: bool) -> None:
+        if not self.save_settings_ui(): return
+        logs = Path(self.settings["general"]["logs_dir"])
+        self.run_background_test("kokoro", lambda: test_kokoro(self.settings["kokoro"], logs, generate))
+
+    def validate_comfyui_workflow(self) -> None:
+        if not self.save_settings_ui(): return
+        ok, reason, _ = validate_workflow(self.settings["comfyui"]["workflow_file"], self.settings["comfyui"])
+        self.test_logs["comfyui"] = reason
+        messagebox.showinfo("ComfyUI workflow" if ok else "ComfyUI workflow error", reason)
+
+    def run_comfyui_test(self, generate: bool) -> None:
+        if not self.save_settings_ui(): return
+        self.run_background_test("comfyui", lambda: test_comfyui(self.settings["comfyui"], generate))
+
+    def run_kling_test(self) -> None:
+        if not self.save_settings_ui(): return
+        if self.settings["kling"]["mode"] == "Manual Import":
+            self.finish_connection_test("kling", {"ok": False, "reason": "Manual Import: generation occurs on the Kling website and files are imported here."})
+            return
+        try:
+            key = self.credentials.get("kling_api_key")
+        except Exception:
+            key = ""
+        self.run_background_test("kling", lambda: test_kling_api(self.settings["kling"], key))
+
+    def auto_detect_ffmpeg(self) -> None:
+        ffmpeg, ffprobe = detect_ffmpeg(self._entry_value("ffmpeg.ffmpeg"))
+        for key, value in (("ffmpeg.ffmpeg", ffmpeg), ("ffmpeg.ffprobe", ffprobe)):
+            entry = self.setting_entries[key]
+            entry.delete(0, "end")
+            entry.insert(0, value)
+        self.set_connection_status("ffmpeg", "Not configured", f"Detected FFmpeg: {ffmpeg or 'none'}; run the real MP4 test.")
+
+    def run_ffmpeg_test(self) -> None:
+        if not self.save_settings_ui(): return
+        temp_dir = Path(self.settings["general"]["temp_dir"])
+        self.run_background_test("ffmpeg", lambda: test_ffmpeg(self.settings["ffmpeg"], temp_dir))
+
+    def open_setting_path(self, key: str) -> None:
+        path = Path(self._entry_value(key))
+        path.mkdir(parents=True, exist_ok=True)
+        os.startfile(path)
+
+    def open_setting_parent(self, key: str) -> None:
+        path = Path(self._entry_value(key))
+        os.startfile(path.parent if path.suffix else path)
+
+    def view_test_log(self, name: str) -> None:
+        text = self.test_logs.get(name, "No test has been run in this session.")
+        window = ctk.CTkToplevel(self)
+        window.title(f"{name.title()} test log")
+        window.geometry("850x500")
+        box = ctk.CTkTextbox(window)
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+        box.insert("1.0", redact(text))
+
+    def refresh_diagnostics(self) -> None:
+        if not hasattr(self, "diagnostics_box"): return
+        statuses = self.settings.get("status", {})
+        report = [
+            f"Application version: {self.version}", f"Operating system: {platform.platform()}",
+            f"Application data: {self.settings['general']['app_data_dir']}", f"Project path: {self.settings['general']['project_dir']}",
+            f"Python: {self.settings['kokoro']['python']}",
+            f"Kokoro: {statuses.get('kokoro', {}).get('state', 'Not configured')} - {statuses.get('kokoro', {}).get('reason', '')}",
+            f"ComfyUI: {statuses.get('comfyui', {}).get('state', 'Not configured')} - {statuses.get('comfyui', {}).get('reason', '')}",
+            f"Kling: {statuses.get('kling', {}).get('state', 'Manual mode')} - {statuses.get('kling', {}).get('reason', '')}",
+            f"FFmpeg: {statuses.get('ffmpeg', {}).get('state', 'Not configured')} - {statuses.get('ffmpeg', {}).get('reason', '')}",
+            f"Logs: {self.settings['general']['logs_dir']}",
+        ]
+        self.diagnostics_box.delete("1.0", "end")
+        self.diagnostics_box.insert("1.0", redact("\n".join(report)))
+
+    def run_all_diagnostics(self) -> None:
+        if not self.save_settings_ui(): return
+        self.run_kokoro_test(True)
+        if self.settings["comfyui"].get("workflow_file"):
+            self.run_comfyui_test(True)
+        else:
+            self.finish_connection_test("comfyui", {"ok": False, "reason": "Optional: configure a workflow JSON before test generation."})
+        self.run_kling_test()
+        self.run_ffmpeg_test()
+
+    def copy_diagnostics(self) -> None:
+        self.copy_text(redact(self.diagnostics_box.get("1.0", "end-1c")))
+
+    def clear_temporary_files(self) -> None:
+        import shutil
+        temp = Path(self.settings["general"]["temp_dir"]).resolve()
+        app_data = Path(self.settings["general"]["app_data_dir"]).resolve()
+        if temp == app_data or app_data not in temp.parents:
+            messagebox.showerror(APP_NAME, "Temporary directory must be inside the application data directory.")
+            return
+        if temp.exists():
+            for child in temp.iterdir():
+                if child.is_dir(): shutil.rmtree(child)
+                else: child.unlink()
+        self.status.configure(text="Temporary files cleared")
+
+    def show_setup_wizard(self) -> None:
+        window = ctk.CTkToplevel(self)
+        window.title("First-launch setup")
+        window.geometry("680x500")
+        window.transient(self)
+        ctk.CTkLabel(window, text="YouTube AI Studio setup", font=ctk.CTkFont(size=24, weight="bold")).pack(anchor="w", padx=20, pady=(20, 6))
+        python = detect_python(self.settings["kokoro"]["install_dir"])
+        ffmpeg, _ = detect_ffmpeg()
+        checks = []
+        for label, path in (("Application data", self.settings["general"]["app_data_dir"]), ("Project directory", self.settings["general"]["project_dir"]), ("Output directory", self.settings["output"]["export_dir"])):
+            ok, reason = validate_directory(path)
+            checks.append(f"{'Ready' if ok else 'Failed'} - {label}: {reason}")
+        checks.extend([
+            f"{'Ready' if python else 'Failed'} - Python: {python or 'not detected'}",
+            "Manual setup required - Kokoro: generate a test voice in Settings",
+            "Optional - ComfyUI: configure URL and workflow in Settings",
+            "Manual setup required - Kling: defaults to Manual Import",
+            f"{'Manual setup required' if not ffmpeg else 'Ready for test'} - FFmpeg: {ffmpeg or 'not detected'}",
+        ])
+        box = ctk.CTkTextbox(window, height=280)
+        box.pack(fill="both", expand=True, padx=20, pady=10)
+        box.insert("1.0", "\n\n".join(checks))
+        bar = ctk.CTkFrame(window, fg_color="transparent")
+        bar.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(bar, text="Open Settings", command=lambda: (self.tabs.set("Settings"), window.destroy())).pack(side="left")
+        ctk.CTkButton(bar, text="Skip optional services", command=lambda: (self.settings_store.save(self.settings), window.destroy())).pack(side="right")
+
     def new_project(self) -> None:
         title = self.project_title.get().strip() or "My YouTube Video"
-        folder = PROJECTS_DIR / safe_name(title)
+        project_root = Path(self.settings["general"]["project_dir"])
+        project_root.mkdir(parents=True, exist_ok=True)
+        folder = project_root / safe_name(title)
         counter = 2
         original = folder
         while folder.exists():
@@ -389,16 +787,24 @@ class Studio(ctk.CTk):
     def open_project(self) -> None:
         selected = filedialog.askdirectory(
             title="Open YouTube AI Studio project",
-            initialdir=str(PROJECTS_DIR),
+            initialdir=self.settings["general"]["project_dir"],
         )
         if not selected:
             return
-        path = Path(selected)
+        self.load_project_path(Path(selected))
+
+    def load_project_path(self, path: Path, quiet: bool = False) -> None:
         project_file = path / "project.json"
         if not project_file.exists():
-            messagebox.showerror(APP_NAME, "This folder does not contain project.json.")
+            if not quiet:
+                messagebox.showerror(APP_NAME, "This folder does not contain project.json.")
             return
-        data = json.loads(project_file.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(project_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            if not quiet:
+                messagebox.showerror(APP_NAME, f"Could not open project: {exc}")
+            return
         self.current_project_path = path
         self.project_title.delete(0, "end")
         self.project_title.insert(0, data.get("title", path.name))
@@ -407,6 +813,8 @@ class Studio(ctk.CTk):
         self.scenes = data.get("scenes", [])
         self.refresh_scene_list()
         self.status.configure(text=f"Project: {path.name}")
+        self.settings["general"]["last_project"] = str(path)
+        self.settings_store.save(self.settings)
 
     def save_project(self) -> None:
         if not self.current_project_path:
@@ -430,6 +838,14 @@ class Studio(ctk.CTk):
             data["script"], encoding="utf-8"
         )
         self.status.configure(text=f"Saved: {self.current_project_path.name}")
+        self.settings["general"]["last_project"] = str(self.current_project_path)
+        self.settings_store.save(self.settings)
+
+    def schedule_auto_save(self) -> None:
+        interval = max(15, int(self.settings["general"].get("auto_save_interval", 60)))
+        if self.settings["general"].get("auto_save") and self.current_project_path:
+            self.save_project()
+        self.after(interval * 1000, self.schedule_auto_save)
 
     def split_script_into_scenes(self) -> None:
         text = self.script_box.get("1.0", "end-1c").strip()
@@ -528,7 +944,9 @@ class Studio(ctk.CTk):
         self.update()
         self.status.configure(text="Copied to clipboard")
 
-    def get_pipeline(self, language: str) -> KPipeline:
+    def get_pipeline(self, language: str):
+        from kokoro import KPipeline
+
         if language not in self.pipeline_cache:
             self.pipeline_cache[language] = KPipeline(
                 lang_code=language,
@@ -631,7 +1049,9 @@ class Studio(ctk.CTk):
 
     def open_project_folder(self) -> None:
         if not self.current_project_path:
-            os.startfile(PROJECTS_DIR)
+            root = Path(self.settings["general"]["project_dir"])
+            root.mkdir(parents=True, exist_ok=True)
+            os.startfile(root)
         else:
             os.startfile(self.current_project_path)
 
@@ -651,5 +1071,9 @@ if __name__ == "__main__":
         if marker:
             Path(marker).write_text("ok", encoding="utf-8")
         raise SystemExit(0)
+    elif os.environ.get("YOUTUBE_AI_STUDIO_UI_SMOKE_TEST") == "1":
+        studio = Studio()
+        studio.update()
+        studio.destroy()
     else:
         Studio().mainloop()

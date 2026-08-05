@@ -1,5 +1,5 @@
 #define AppName "YouTube AI Studio"
-#define AppVersion "0.3.2"
+#define AppVersion "0.4.0"
 #define AppPublisher "crowsley"
 #define AppExeName "YouTubeAIStudio.exe"
 
