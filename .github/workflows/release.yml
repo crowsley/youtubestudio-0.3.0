@@ -25,6 +25,18 @@ jobs:
       - name: Build installer
         shell: cmd
         run: build_exe.bat
+      - name: Smoke test packaged application
+        shell: pwsh
+        run: |
+          $env:YOUTUBE_AI_STUDIO_SMOKE_TEST = "1"
+          $process = Start-Process "dist/YouTubeAIStudio/YouTubeAIStudio.exe" -PassThru
+          if (-not $process.WaitForExit(180000)) {
+            $process.Kill()
+            throw "Packaged application smoke test timed out."
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged application smoke test failed with exit code $($process.ExitCode)."
+          }
       - name: Sign installer
         if: ${{ env.CERTIFICATE_BASE64 != '' }}
         shell: pwsh
