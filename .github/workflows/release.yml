@@ -11,6 +11,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,11 +26,8 @@ jobs:
         shell: cmd
         run: build_exe.bat
       - name: Sign installer
-        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.CERTIFICATE_BASE64 != '' }}
         shell: pwsh
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
           & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:CERTIFICATE_PASSWORD installer-output/YouTube-AI-Studio-Setup.exe
