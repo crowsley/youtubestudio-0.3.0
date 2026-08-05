@@ -24,8 +24,15 @@ class FakeRunner:
         self.outcome, self.cancelled = outcome, False
 
     def run(self, command, timeout, on_output):
-        output = Path(command[command.index("--output") + 1])
         on_output("stdout", json.dumps({"event": "stage", "stage": "loading_model"}) + "\n")
+        if "--batch-file" in command:
+            jobs = json.loads(Path(command[command.index("--batch-file") + 1]).read_text(encoding="utf-8"))
+            for current, job in enumerate(jobs, 1):
+                on_output("stdout", json.dumps({"event": "item_start", "index": job["index"], "current": current, "total": len(jobs)}) + "\n")
+                make_wav(Path(job["output"]))
+                on_output("stdout", json.dumps({"event": "item_complete", "index": job["index"], "current": current, "total": len(jobs)}) + "\n")
+            return ProcessResult(command, 0, "ok", "")
+        output = Path(command[command.index("--output") + 1])
         if self.outcome == "success":
             make_wav(output)
             on_output("stdout", json.dumps({"event": "complete", "output": str(output), "duration": .1}) + "\n")
@@ -79,6 +86,15 @@ class NarrationTests(unittest.TestCase):
             self.assertTrue(result.success)
             self.assertEqual(events[0]["stage"], "loading_model")
             self.assertTrue(Path(result.output).is_file())
+
+    def test_batch_generation_uses_one_process(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); runner = FakeRunner(); provider = KokoroNarrationProvider(self.config(root), root/"log.txt", runner); events = []
+            jobs = [{"index": index, "text": f"Scene {index}", "output": str(root/f"scene-{index}.wav")} for index in (1, 2, 3)]
+            results = provider.generate_batch(jobs, "bm_lewis", "b", .95, events.append)
+            self.assertTrue(all(result.success for result in results.values()))
+            self.assertEqual(sum(event.get("stage") == "loading_model" for event in events), 1)
+            self.assertEqual(sum(event.get("event") == "item_complete" for event in events), 3)
 
     def test_subprocess_failure_preserves_stderr(self):
         with tempfile.TemporaryDirectory() as folder:

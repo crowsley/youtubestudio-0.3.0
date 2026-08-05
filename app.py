@@ -1067,13 +1067,21 @@ class Studio(ctk.CTk):
                 self.after(0, lambda: self.finish_combination(info))
                 return
             required = [i for i in indexes if clean_text(self.scenes[i].get("narration", ""))]
-            for position, index in enumerate(required, 1):
+            queued = []
+            for index in required:
                 scene = self.scenes[index]
-                if scene.get("audioStatus") == "Complete" and not regenerate and Path(scene.get("audioPath", "")).is_file(): skipped += 1; continue
-                scene["audioStatus"], scene["audioError"] = "Generating", ""
+                if scene.get("audioStatus") == "Complete" and not regenerate and Path(scene.get("audioPath", "")).is_file():
+                    skipped += 1; continue
+                scene["audioStatus"], scene["audioError"] = "Queued", ""
                 output = project / "audio" / "scenes" / f"scene-{index+1:03d}.wav"
-                self.after(0, lambda p=position, i=index: self.set_voice_busy(True, f"Generating scene {i+1} ({p}/{len(required)})", (p-1)/max(1, len(required))))
-                result = self.voice_provider.generate(scene.get("narration", ""), voice_id, language, speed, output, self.voice_event)
+                queued.append({"index": index, "text": scene.get("narration", ""), "output": str(output)})
+            if len(queued) > 1:
+                results = self.voice_provider.generate_batch(queued, voice_id, language, speed, self.voice_event)
+            else:
+                results = {job["index"]: self.voice_provider.generate(job["text"], voice_id, language, speed, Path(job["output"]), self.voice_event) for job in queued}
+            for job in queued:
+                index, result = job["index"], results[job["index"]]
+                scene = self.scenes[index]
                 if not result.success:
                     scene["audioStatus"] = "Cancelled" if result.cancelled else "Failed"
                     scene["audioError"] = result.error
@@ -1089,6 +1097,9 @@ class Studio(ctk.CTk):
             self.after(0, lambda: self.voice_finished(f"Generation failed: {exc}", True))
 
     def voice_event(self, event: dict) -> None:
+        if event.get("event") == "item_start":
+            current, total, index = event["current"], event["total"], event["index"]
+            self.after(0, lambda: self.set_voice_busy(True, f"Generating scene {index+1} ({current}/{total})", (current-1)/max(1, total)))
         stage = str(event.get("stage", "")).replace("_", " ").title()
         message = stage or event.get("message") or json.dumps(event)
         self.after(0, lambda: self.append_voice_log(message))

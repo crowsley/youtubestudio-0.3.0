@@ -68,6 +68,50 @@ class KokoroNarrationProvider:
         adapter = Path(__file__).with_name("narration_adapter.py")
         return [str(self.config.get("python", "")), str(adapter), "--text-file", str(text_file), "--output", str(output), "--voice", voice, "--language", language, "--speed", str(speed), "--model-repo", self.config.get("model_repo", "hexgrad/Kokoro-82M")]
 
+    def generate_batch(self, jobs: list[dict], voice: str, language: str, speed: float, on_event: Callable[[dict], None] | None = None) -> dict[int, NarrationResult]:
+        started = time.monotonic()
+        python, install = Path(self.config.get("python", "")), Path(self.config.get("install_dir", ""))
+        if not python.is_file() or not install.is_dir():
+            error = f"Kokoro configuration is missing: Python={python}, installation={install}"
+            return {job["index"]: NarrationResult(False, error=error) for job in jobs}
+        batch, temporary = [], {}
+        for job in jobs:
+            output = Path(job["output"]); output.parent.mkdir(parents=True, exist_ok=True)
+            temp = output.with_name(output.stem + ".tmp.wav"); temp.unlink(missing_ok=True)
+            temporary[job["index"]] = (temp, output)
+            batch.append({"index": job["index"], "text": clean_text(job["text"]), "output": str(temp)})
+        fd, manifest_name = tempfile.mkstemp(prefix="narration-batch-", suffix=".json", dir=Path(jobs[0]["output"]).parent)
+        os.close(fd); manifest = Path(manifest_name); manifest.write_text(json.dumps(batch, ensure_ascii=False), encoding="utf-8")
+        adapter = Path(__file__).with_name("narration_adapter.py")
+        command = [str(python), str(adapter), "--batch-file", str(manifest), "--voice", voice, "--language", language, "--speed", str(speed), "--model-repo", self.config.get("model_repo", "hexgrad/Kokoro-82M")]
+        errors = {}
+        def receive(stream: str, line: str) -> None:
+            try:
+                item = json.loads(line) if stream == "stdout" else {"event": "log", "message": line.rstrip(), "stream": stream}
+                if item.get("event") == "item_error": errors[item.get("index")] = item.get("message", "Generation failed")
+                if on_event: on_event(item)
+            except json.JSONDecodeError:
+                if on_event: on_event({"event": "log", "message": line.rstrip(), "stream": stream})
+        try:
+            timeout = float(self.config.get("timeout", 180)) * max(1, len(jobs))
+            process = self.runner.run(command, timeout, receive)
+            results = {}
+            for job in jobs:
+                index = job["index"]; temp, output = temporary[index]
+                try:
+                    info = validate_wav(temp)
+                    os.replace(temp, output)
+                    elapsed = time.monotonic() - started
+                    self._log(command, voice, speed, process, info, elapsed)
+                    results[index] = NarrationResult(True, output=str(output), duration=info["duration"], file_size=info["file_size"], sample_rate=info["sample_rate"], channels=info["channels"], exit_code=process.exit_code, elapsed=elapsed, stdout=process.stdout, stderr=process.stderr)
+                except Exception as exc:
+                    error = errors.get(index) or ("Generation cancelled" if process.cancelled else str(exc))
+                    results[index] = NarrationResult(False, exit_code=process.exit_code, elapsed=time.monotonic()-started, stdout=process.stdout, stderr=process.stderr, error=error, cancelled=process.cancelled, timed_out=process.timed_out)
+            return results
+        finally:
+            manifest.unlink(missing_ok=True)
+            for temp, _ in temporary.values(): temp.unlink(missing_ok=True)
+
     def generate(self, text: str, voice: str, language: str, speed: float, output: Path, on_event: Callable[[dict], None] | None = None) -> NarrationResult:
         started = time.monotonic()
         text = clean_text(text)
