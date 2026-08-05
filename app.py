@@ -4,11 +4,19 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+# Windowed PyInstaller apps have no console streams, but Kokoro configures
+# Loguru with stderr during import.
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
 
 import customtkinter as ctk
 import numpy as np

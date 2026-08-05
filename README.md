@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.3.0
+## Version 0.3.1
 
 - Project, script and scene management
 - Local Kokoro narration generation
