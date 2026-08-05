@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -20,9 +21,8 @@ if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
 
 import customtkinter as ctk
-import numpy as np
-import soundfile as sf
 from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
+from narration import KokoroNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
 APP_NAME = "YouTube AI Studio"
@@ -83,6 +83,10 @@ class Studio(ctk.CTk):
         self.current_project_path: Path | None = None
         self.pipeline_cache: dict[str, object] = {}
         self.generating = False
+        self.voice_provider = None
+        self.failed_voice_indexes: list[int] = []
+        self.audio_player = WindowsAudioPlayer()
+        self.project_narration: dict = {}
 
         self.build_ui()
         self.schedule_auto_save()
@@ -269,48 +273,66 @@ class Studio(ctk.CTk):
     def create_voice_tab(self) -> None:
         tab = self.tabs.add("Voice")
         tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(4, weight=1)
 
         settings = ctk.CTkFrame(tab)
         settings.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-        ctk.CTkLabel(settings, text="Voice").grid(row=0, column=0, padx=14, pady=14)
+        self.voice_badge = ctk.CTkLabel(settings, text="Not generated", corner_radius=8, fg_color=("gray75", "gray30"), width=120)
+        self.voice_badge.grid(row=0, column=0, padx=12, pady=12)
+        ctk.CTkLabel(settings, text="Voice").grid(row=0, column=1, padx=(8, 4))
         self.voice_menu = ctk.CTkOptionMenu(
             settings, values=list(VOICE_OPTIONS), width=230
         )
         self.voice_menu.set("British Female - Emma")
-        self.voice_menu.grid(row=0, column=1, padx=8, pady=14)
+        self.voice_menu.grid(row=0, column=2, padx=4, pady=12)
 
-        ctk.CTkLabel(settings, text="Speed").grid(row=0, column=2, padx=(20, 8))
+        ctk.CTkLabel(settings, text="Language").grid(row=0, column=3, padx=(12, 4))
+        self.voice_language = ctk.CTkOptionMenu(settings, values=["b", "a"], width=70)
+        self.voice_language.set("b")
+        self.voice_language.grid(row=0, column=4, padx=4)
+        ctk.CTkLabel(settings, text="Speed").grid(row=0, column=5, padx=(12, 4))
         self.speed = ctk.DoubleVar(value=1.0)
         ctk.CTkSlider(
             settings, from_=0.7, to=1.3, number_of_steps=12,
-            variable=self.speed, width=190
-        ).grid(row=0, column=3, padx=8)
+            variable=self.speed, width=140
+        ).grid(row=0, column=6, padx=4)
         self.speed_readout = ctk.CTkLabel(settings, textvariable=self.speed, width=60)
-        self.speed_readout.grid(row=0, column=4, padx=8)
+        self.speed_readout.grid(row=0, column=7, padx=4)
 
         buttons = ctk.CTkFrame(tab)
         buttons.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
-
-        ctk.CTkButton(
-            buttons, text="Generate selected scene",
-            command=self.generate_selected_scene
-        ).pack(side="left", padx=10, pady=12)
-
-        ctk.CTkButton(
-            buttons, text="Generate all scenes",
-            command=self.generate_all_scenes
-        ).pack(side="left", padx=10, pady=12)
-
-        ctk.CTkButton(
-            buttons, text="Open voice folder",
-            command=self.open_voice_folder
-        ).pack(side="left", padx=10, pady=12)
+        self.voice_action_buttons = []
+        for label, command in [
+            ("Preview text", self.preview_selected_text), ("Generate scene", self.generate_selected_scene),
+            ("Generate all", self.generate_all_scenes), ("Full narration", self.generate_full_narration),
+            ("Retry failed", self.retry_failed_generation), ("Cancel", self.cancel_voice_generation),
+            ("Open folder", self.open_voice_folder), ("Open log", self.open_voice_log),
+        ]:
+            button = ctk.CTkButton(buttons, text=label, command=command, width=115)
+            button.pack(side="left", padx=4, pady=10)
+            self.voice_action_buttons.append(button)
 
         self.voice_status = ctk.CTkLabel(
             tab, text="Create or open a project before generating narration."
         )
-        self.voice_status.grid(row=2, column=0, padx=14, pady=14, sticky="w")
+        self.voice_status.grid(row=2, column=0, padx=14, pady=(6, 2), sticky="w")
+        self.voice_progress = ctk.CTkProgressBar(tab)
+        self.voice_progress.set(0)
+        self.voice_progress.grid(row=3, column=0, padx=14, pady=6, sticky="ew")
+        self.voice_log = ctk.CTkTextbox(tab, height=150, wrap="word")
+        self.voice_log.grid(row=4, column=0, padx=14, pady=6, sticky="nsew")
+        player = ctk.CTkFrame(tab)
+        player.grid(row=5, column=0, padx=10, pady=(4, 10), sticky="ew")
+        for label, command in [("Play", self.play_audio), ("Pause", self.pause_audio), ("Stop", self.stop_audio), ("Replay", self.replay_audio), ("Delete scene audio", self.delete_selected_audio)]:
+            ctk.CTkButton(player, text=label, command=command, width=105).pack(side="left", padx=4, pady=8)
+        self.audio_seek = ctk.CTkSlider(player, from_=0, to=1, command=self.seek_audio, width=170)
+        self.audio_seek.pack(side="left", padx=8)
+        self.audio_volume = ctk.CTkSlider(player, from_=0, to=1, command=self.set_audio_volume, width=100)
+        self.audio_volume.set(1)
+        self.audio_volume.pack(side="left", padx=8)
+        self.audio_details = ctk.CTkLabel(player, text="No audio loaded")
+        self.audio_details.pack(side="left", padx=8)
 
     def create_prompts_tab(self) -> None:
         tab = self.tabs.add("Kling & Images")
@@ -474,6 +496,7 @@ class Studio(ctk.CTk):
             ("Transition duration", "output.transition_duration", None), ("Video codec", "output.video_codec", None),
             ("Hardware encoder", "output.hardware_encoder", None), ("Audio codec", "output.audio_codec", None),
             ("Output quality", "output.quality", None), ("Overwrite behaviour", "output.overwrite", None),
+            ("Silence between scenes (seconds)", "narration.silence", None),
         ]
         for row, (label, key, browse) in enumerate(output_fields, 1):
             self._setting_entry(output, row, label, key, browse=browse)
@@ -779,6 +802,7 @@ class Studio(ctk.CTk):
         self.project_title.delete(0, "end")
         self.project_title.insert(0, title)
         self.scenes = []
+        self.project_narration = {}
         self.refresh_scene_list()
         self.script_box.delete("1.0", "end")
         self.status.configure(text=f"Project: {folder.name}")
@@ -810,7 +834,12 @@ class Studio(ctk.CTk):
         self.project_title.insert(0, data.get("title", path.name))
         self.script_box.delete("1.0", "end")
         self.script_box.insert("1.0", data.get("script", ""))
-        self.scenes = data.get("scenes", [])
+        self.scenes = [self.migrate_scene(scene) for scene in data.get("scenes", [])]
+        self.project_narration = data.get("narration", {})
+        if data.get("voice") in VOICE_OPTIONS:
+            self.voice_menu.set(data["voice"])
+        self.speed.set(float(data.get("speed", 1.0)))
+        self.repair_audio_state()
         self.refresh_scene_list()
         self.status.configure(text=f"Project: {path.name}")
         self.settings["general"]["last_project"] = str(path)
@@ -822,12 +851,14 @@ class Studio(ctk.CTk):
             return
         self.capture_selected_scene()
         data = {
+            "schema_version": 2,
             "version": self.version,
             "title": self.project_title.get().strip(),
             "script": self.script_box.get("1.0", "end-1c"),
             "scenes": self.scenes,
             "voice": self.voice_menu.get(),
             "speed": float(self.speed.get()),
+            "narration": self.project_narration,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
         (self.current_project_path / "project.json").write_text(
@@ -840,6 +871,33 @@ class Studio(ctk.CTk):
         self.status.configure(text=f"Saved: {self.current_project_path.name}")
         self.settings["general"]["last_project"] = str(self.current_project_path)
         self.settings_store.save(self.settings)
+
+    def migrate_scene(self, scene: dict) -> dict:
+        migrated = dict(scene)
+        migrated.setdefault("narrationText", migrated.get("narration", ""))
+        migrated.setdefault("voiceId", "")
+        migrated.setdefault("voiceSpeed", 1.0)
+        migrated.setdefault("audioPath", "")
+        migrated.setdefault("audioDuration", 0)
+        migrated.setdefault("audioFileSize", 0)
+        migrated.setdefault("audioStatus", "Not generated")
+        migrated.setdefault("audioGeneratedAt", "")
+        migrated.setdefault("audioError", "")
+        return migrated
+
+    def repair_audio_state(self) -> None:
+        for scene in self.scenes:
+            path = Path(scene.get("audioPath", "")) if scene.get("audioPath") else None
+            if scene.get("audioStatus") == "Complete" and (not path or not path.is_file()):
+                scene["audioStatus"] = "Not generated"
+                scene["audioError"] = "Referenced narration file is missing"
+        path = Path(self.project_narration.get("combinedNarrationPath", "")) if self.project_narration.get("combinedNarrationPath") else None
+        if self.project_narration.get("narrationStatus") == "Complete" and (not path or not path.is_file()):
+            self.project_narration["narrationStatus"] = "Not generated"
+
+    def narration_summary(self) -> str:
+        complete = sum(scene.get("audioStatus") == "Complete" for scene in self.scenes)
+        return f"Narration: {complete} of {len(self.scenes)} scenes complete"
 
     def schedule_auto_save(self) -> None:
         interval = max(15, int(self.settings["general"].get("auto_save_interval", 60)))
@@ -855,12 +913,12 @@ class Studio(ctk.CTk):
         paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
         self.scenes = []
         for i, paragraph in enumerate(paragraphs, 1):
-            self.scenes.append({
+            self.scenes.append(self.migrate_scene({
                 "title": f"Scene {i:02d}",
                 "narration": paragraph,
                 "kling_prompt": "",
                 "image_prompt": "",
-            })
+            }))
         self.refresh_scene_list()
         self.tabs.set("Scenes")
 
@@ -893,6 +951,9 @@ class Studio(ctk.CTk):
         self.kling_prompt.insert("1.0", scene.get("kling_prompt", ""))
         self.image_prompt.delete("1.0", "end")
         self.image_prompt.insert("1.0", scene.get("image_prompt", ""))
+        self.voice_badge.configure(text=scene.get("audioStatus", "Not generated"))
+        if scene.get("audioPath") and Path(scene["audioPath"]).is_file():
+            self.audio_details.configure(text=f"{Path(scene['audioPath']).name} — {float(scene.get('audioDuration', 0)):.2f}s — {scene.get('audioFileSize', 0)} bytes")
 
     def clear_scene_fields(self) -> None:
         for widget in [self.scene_narration, self.kling_prompt, self.image_prompt]:
@@ -912,12 +973,12 @@ class Studio(ctk.CTk):
 
     def add_scene(self) -> None:
         self.capture_selected_scene()
-        self.scenes.append({
+        self.scenes.append(self.migrate_scene({
             "title": f"Scene {len(self.scenes)+1:02d}",
             "narration": "",
             "kling_prompt": "",
             "image_prompt": "",
-        })
+        }))
         self.refresh_scene_list()
         self.select_scene(len(self.scenes)-1)
 
@@ -944,73 +1005,197 @@ class Studio(ctk.CTk):
         self.update()
         self.status.configure(text="Copied to clipboard")
 
-    def get_pipeline(self, language: str):
-        from kokoro import KPipeline
-
-        if language not in self.pipeline_cache:
-            self.pipeline_cache[language] = KPipeline(
-                lang_code=language,
-                repo_id="hexgrad/Kokoro-82M",
-            )
-        return self.pipeline_cache[language]
-
     def generate_selected_scene(self) -> None:
         self.capture_selected_scene()
         if self.selected_scene_index is None:
             messagebox.showwarning(APP_NAME, "Select a scene first.")
             return
-        self.start_voice_generation([self.selected_scene_index])
+        scene = self.scenes[self.selected_scene_index]
+        if scene.get("audioStatus") == "Complete" and Path(scene.get("audioPath", "")).is_file():
+            if not messagebox.askyesno(APP_NAME, "Narration already exists. Regenerate it?"):
+                return
+        self.start_voice_generation([self.selected_scene_index], regenerate=True)
 
     def generate_all_scenes(self) -> None:
         self.capture_selected_scene()
-        if not self.scenes:
-            messagebox.showwarning(APP_NAME, "Create some scenes first.")
-            return
         self.start_voice_generation(list(range(len(self.scenes))))
 
-    def start_voice_generation(self, indexes: list[int]) -> None:
+    def validate_voice_request(self, indexes: list[int]) -> bool:
+        errors = []
+        if not self.current_project_path: errors.append("Create or open a project first.")
+        if not self.project_title.get().strip(): errors.append("Project title is required.")
+        if not self.script_box.get("1.0", "end-1c").strip(): errors.append("Add or import a master script first.")
+        if not self.scenes: errors.append("Split the script into scenes first.")
+        if indexes and not any(clean_text(self.scenes[i].get("narration", "")) for i in indexes): errors.append("The selected scenes contain no narration text.")
+        if errors: messagebox.showerror("Narration validation", "\n".join(errors)); return False
+        return True
+
+    def start_voice_generation(self, indexes: list[int], regenerate: bool = False, preview_text: str = "", combine: bool = False) -> None:
         if self.generating:
             return
-        if not self.current_project_path:
-            messagebox.showwarning(APP_NAME, "Create or open a project first.")
-            return
+        if not preview_text and not combine and not self.validate_voice_request(indexes): return
+        config = dict(self.settings["kokoro"])
+        label = self.voice_menu.get()
+        _, voice_id = VOICE_OPTIONS[label]
+        language, speed = self.voice_language.get(), float(self.speed.get())
         self.generating = True
-        self.voice_status.configure(text="Generating narration...")
+        self.failed_voice_indexes = []
+        self.set_voice_busy(True, "Validating", 0)
+        self.voice_log.delete("1.0", "end")
         thread = threading.Thread(
-            target=self.voice_worker, args=(indexes,), daemon=True
+            target=self.voice_worker, args=(indexes, config, voice_id, language, speed, regenerate, preview_text, combine), daemon=True
         )
         thread.start()
 
-    def voice_worker(self, indexes: list[int]) -> None:
+    def voice_worker(self, indexes: list[int], config: dict, voice_id: str, language: str, speed: float, regenerate: bool, preview_text: str, combine: bool) -> None:
+        project = self.current_project_path
+        log_file = project / "logs" / "voice-generation.log"
+        self.voice_provider = KokoroNarrationProvider(config, log_file)
+        started, completed, skipped = time.monotonic(), 0, 0
         try:
-            voice_label = self.voice_menu.get()
-            language, voice_id = VOICE_OPTIONS[voice_label]
-            pipeline = self.get_pipeline(language)
-            voice_dir = self.current_project_path / "02_voice"
-            voice_dir.mkdir(exist_ok=True)
-
-            for index in indexes:
+            if preview_text:
+                output = project / "audio" / "previews" / f"preview-{datetime.now().strftime('%Y%m%d-%H%M%S')}.wav"
+                result = self.voice_provider.generate(preview_text[:500], voice_id, language, speed, output, self.voice_event)
+                self.after(0, lambda: self.finish_voice_run(result, [], True))
+                return
+            if combine:
+                paths = [Path(scene["audioPath"]) for scene in self.scenes if scene.get("audioStatus") == "Complete"]
+                if len(paths) != len([s for s in self.scenes if clean_text(s.get("narration", ""))]): raise ValueError("Generate all required scene narration before combining.")
+                self.after(0, lambda: self.set_voice_busy(True, "Verifying", .9))
+                info = combine_wavs(paths, project / "audio" / "narration.wav", float(self.settings.get("narration", {}).get("silence", .25)))
+                self.project_narration = {"combinedNarrationPath": info["path"], "combinedNarrationDuration": info["duration"], "narrationStatus": "Complete", "narrationUpdatedAt": datetime.now().isoformat(timespec="seconds")}
+                self.after(0, lambda: self.finish_combination(info))
+                return
+            required = [i for i in indexes if clean_text(self.scenes[i].get("narration", ""))]
+            for position, index in enumerate(required, 1):
                 scene = self.scenes[index]
-                text = scene.get("narration", "").strip()
-                if not text:
+                if scene.get("audioStatus") == "Complete" and not regenerate and Path(scene.get("audioPath", "")).is_file(): skipped += 1; continue
+                scene["audioStatus"], scene["audioError"] = "Generating", ""
+                output = project / "audio" / "scenes" / f"scene-{index+1:03d}.wav"
+                self.after(0, lambda p=position, i=index: self.set_voice_busy(True, f"Generating scene {i+1} ({p}/{len(required)})", (p-1)/max(1, len(required))))
+                result = self.voice_provider.generate(scene.get("narration", ""), voice_id, language, speed, output, self.voice_event)
+                if not result.success:
+                    scene["audioStatus"] = "Cancelled" if result.cancelled else "Failed"
+                    scene["audioError"] = result.error
+                    self.failed_voice_indexes.append(index)
+                    if result.cancelled: break
                     continue
-                parts = []
-                for _, _, audio in pipeline(
-                    text, voice=voice_id, speed=float(self.speed.get())
-                ):
-                    parts.append(np.asarray(audio, dtype=np.float32))
-                if parts:
-                    filename = f"{index+1:02d}_{safe_name(scene.get('title','scene'))}.wav"
-                    sf.write(voice_dir / filename, np.concatenate(parts), 24000)
-
-            self.after(0, lambda: self.voice_finished("Narration generated successfully."))
+                scene.update({"narrationText": clean_text(scene.get("narration", "")), "voiceId": voice_id, "voiceSpeed": speed, "audioPath": result.output, "audioDuration": result.duration, "audioFileSize": result.file_size, "audioStatus": "Complete", "audioGeneratedAt": datetime.now().isoformat(timespec="seconds"), "audioError": ""})
+                completed += 1
+                self.after(0, self.save_project)
+            message = f"Complete: {completed}; skipped: {skipped}; failed: {len(self.failed_voice_indexes)}; elapsed: {time.monotonic()-started:.1f}s"
+            self.after(0, lambda: self.voice_finished(message, bool(self.failed_voice_indexes)))
         except Exception as exc:
-            traceback.print_exc()
-            self.after(0, lambda: self.voice_finished(f"Generation failed: {exc}"))
+            self.after(0, lambda: self.voice_finished(f"Generation failed: {exc}", True))
 
-    def voice_finished(self, message: str) -> None:
+    def voice_event(self, event: dict) -> None:
+        stage = str(event.get("stage", "")).replace("_", " ").title()
+        message = stage or event.get("message") or json.dumps(event)
+        self.after(0, lambda: self.append_voice_log(message))
+
+    def append_voice_log(self, message: str) -> None:
+        self.voice_log.insert("end", f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+        self.voice_log.see("end")
+
+    def set_voice_busy(self, active: bool, status: str, progress: float) -> None:
+        self.generating = active
+        self.voice_status.configure(text=f"{status} — {self.narration_summary()}")
+        self.voice_badge.configure(text=status, fg_color="#9a6700" if active else ("gray75", "gray30"))
+        self.voice_progress.set(max(0, min(1, progress)))
+        for button in self.voice_action_buttons:
+            button.configure(state="normal" if not active or button.cget("text") == "Cancel" else "disabled")
+
+    def voice_finished(self, message: str, failed: bool = False) -> None:
         self.generating = False
+        state = "Failed" if failed else "Complete"
+        self.set_voice_busy(False, state, 1 if not failed else self.voice_progress.get())
         self.voice_status.configure(text=message)
+        self.append_voice_log(message)
+        self.save_project()
+
+    def finish_voice_run(self, result, indexes: list[int], autoplay: bool = False) -> None:
+        if result.success:
+            self.voice_finished(f"Complete — {result.output} — {result.duration:.2f}s, {result.file_size} bytes")
+            self.load_audio(Path(result.output), autoplay)
+        else:
+            state = "Cancelled" if result.cancelled else "Failed"
+            self.set_voice_busy(False, state, 0)
+            self.append_voice_log(result.error or result.stderr)
+            messagebox.showerror("Narration error", result.error or result.stderr or "Generation failed")
+
+    def preview_selected_text(self) -> None:
+        try: text = self.script_box.get("sel.first", "sel.last")
+        except Exception: text = self.scenes[self.selected_scene_index].get("narration", "") if self.selected_scene_index is not None else ""
+        text = clean_text(text)
+        if not text: messagebox.showwarning(APP_NAME, "Select script text or choose a scene with narration."); return
+        self.start_voice_generation([], preview_text=text[:500])
+
+    def generate_full_narration(self) -> None:
+        if not self.validate_voice_request(list(range(len(self.scenes)))): return
+        self.start_voice_generation([], combine=True)
+
+    def finish_combination(self, info: dict) -> None:
+        self.voice_finished(f"Combined narration complete — {info['duration']:.2f}s, {info['file_size']} bytes")
+        self.load_audio(Path(info["path"]), False)
+
+    def cancel_voice_generation(self) -> None:
+        if self.generating and self.voice_provider:
+            self.voice_provider.cancel(); self.append_voice_log("Cancellation requested")
+
+    def retry_failed_generation(self) -> None:
+        indexes = self.failed_voice_indexes or [i for i, scene in enumerate(self.scenes) if scene.get("audioStatus") in {"Failed", "Cancelled"}]
+        if not indexes: messagebox.showinfo(APP_NAME, "There are no failed scenes to retry."); return
+        self.start_voice_generation(indexes, regenerate=True)
+
+    def delete_selected_audio(self) -> None:
+        if self.selected_scene_index is None: return
+        scene = self.scenes[self.selected_scene_index]
+        path = Path(scene.get("audioPath", "")) if scene.get("audioPath") else None
+        if path and path.exists() and messagebox.askyesno(APP_NAME, f"Delete {path.name}?"):
+            path.unlink(); scene.update({"audioPath": "", "audioStatus": "Not generated", "audioDuration": 0, "audioFileSize": 0}); self.save_project()
+
+    def load_audio(self, path: Path, autoplay: bool = False) -> None:
+        try:
+            info = validate_wav(path); self.audio_player.load(path); self.audio_seek.configure(to=max(1, info["duration"])); self.audio_details.configure(text=f"{path.name} — {info['duration']:.2f}s — {info['file_size']} bytes")
+            if autoplay: self.audio_player.play()
+        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+
+    def selected_audio_path(self) -> Path | None:
+        if self.selected_scene_index is not None and self.scenes[self.selected_scene_index].get("audioPath"): return Path(self.scenes[self.selected_scene_index]["audioPath"])
+        if self.project_narration.get("combinedNarrationPath"): return Path(self.project_narration["combinedNarrationPath"])
+        return None
+
+    def play_audio(self) -> None:
+        try:
+            if not self.audio_player.path:
+                path = self.selected_audio_path()
+                if not path: raise ValueError("No generated audio is selected")
+                self.load_audio(path)
+            self.audio_player.play(); self.update_audio_position()
+        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+    def pause_audio(self) -> None:
+        try: self.audio_player.pause()
+        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+    def stop_audio(self) -> None:
+        try: self.audio_player.stop(); self.audio_seek.set(0)
+        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+    def replay_audio(self) -> None: self.stop_audio(); self.play_audio()
+    def seek_audio(self, seconds: float) -> None:
+        if self.audio_player.path:
+            try: self.audio_player.seek(int(float(seconds)*1000)); self.audio_player.play()
+            except Exception: pass
+    def set_audio_volume(self, value: float) -> None:
+        if self.audio_player.path:
+            try: self.audio_player.volume(float(value))
+            except Exception: pass
+    def update_audio_position(self) -> None:
+        try:
+            if self.audio_player.path: self.audio_seek.set(self.audio_player.position()/1000); self.after(500, self.update_audio_position)
+        except Exception: pass
+
+    def open_voice_log(self) -> None:
+        if not self.current_project_path: return
+        path = self.current_project_path / "logs" / "voice-generation.log"; path.parent.mkdir(parents=True, exist_ok=True); path.touch(exist_ok=True); os.startfile(path)
 
     def export_production_pack(self) -> None:
         if not self.current_project_path:
@@ -1029,8 +1214,9 @@ class Studio(ctk.CTk):
             image_file = self.current_project_path / "04_images" / f"{base}.txt"
             kling_file.write_text(scene.get("kling_prompt", ""), encoding="utf-8")
             image_file.write_text(scene.get("image_prompt", ""), encoding="utf-8")
+            narration_file = scene.get("audioPath", "")
             production_rows.append(
-                f'{i},"{scene.get("title","")}","02_voice/{base}.wav",'
+                f'{i},"{scene.get("title","")}","{narration_file}",'
                 f'"03_kling/{base}.txt","04_images/{base}.txt"'
             )
 
@@ -1045,7 +1231,9 @@ class Studio(ctk.CTk):
         if not self.current_project_path:
             messagebox.showwarning(APP_NAME, "Create or open a project first.")
             return
-        os.startfile(self.current_project_path / "02_voice")
+        folder = self.current_project_path / "audio"
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(folder)
 
     def open_project_folder(self) -> None:
         if not self.current_project_path:

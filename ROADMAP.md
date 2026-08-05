@@ -27,12 +27,10 @@
 ## v0.5.0 - Audio workspace
 - Built-in playback
 - Pause and stop
-- Waveform preview
+- Real preview, scene and combined Kokoro narration
+- Cancellable generation, live progress and retry
+- Atomic WAV validation and project resume
 - Regenerate individual scene
-- Pronunciation dictionary
-- Silence controls
-- Loudness normalisation
-- MP3 export
 
 ## v0.6.0 - AI planning
 - Ollama integration

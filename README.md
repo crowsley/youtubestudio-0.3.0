@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.4.0 - Phase 1 Connections
+## Version 0.5.0 - Phase 2 Narration
 
 - Project, script and scene management
 - Local Kokoro narration generation
@@ -16,6 +16,10 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 - Real Kokoro WAV, ComfyUI image and FFmpeg MP4 connection tests
 - Manual/API Kling configuration with secure credential storage
 - Diagnostics with secret redaction and visible failure reasons
+- Cancellable Kokoro subprocess generation with live structured progress
+- Preview, individual scene, sequential all-scenes and combined narration WAVs
+- Validated atomic audio output and resume/retry state in project files
+- Built-in Windows playback with play, pause, stop, replay, seek and volume
 
 ## Development
 

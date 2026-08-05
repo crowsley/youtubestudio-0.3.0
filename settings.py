@@ -59,6 +59,7 @@ def default_settings() -> dict:
             "aspect_ratio": "16:9",
         },
         "ffmpeg": {"ffmpeg": "", "ffprobe": ""},
+        "narration": {"silence": 0.25},
         "output": {
             "project_root": str(DATA_DIR / "projects"),
             "export_dir": str(DATA_DIR / "exports"),
@@ -148,4 +149,3 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)(token|api[_ -]?key|password)(\s*[:=]\s*)\S+", r"\1\2[REDACTED]", value)
     value = re.sub(r"(?i)(authorization:\s*(?:bearer\s+)?)\S+", r"\1[REDACTED]", value)
     return value
-
