@@ -1,0 +1,37 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip setuptools wheel
+      - run: python -m pip install -r requirements.txt
+      - run: choco install innosetup --yes --no-progress
+      - name: Build installer
+        shell: cmd
+        run: build_exe.bat
+      - name: Sign installer
+        if: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:CERTIFICATE_PASSWORD installer-output/YouTube-AI-Studio-Setup.exe
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installer-output/YouTube-AI-Studio-Setup.exe
+          generate_release_notes: true

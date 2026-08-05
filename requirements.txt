@@ -1,0 +1,6 @@
+kokoro
+soundfile
+customtkinter
+numpy
+pyinstaller
+

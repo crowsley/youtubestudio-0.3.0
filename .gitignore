@@ -1,0 +1,9 @@
+venv/
+build/
+dist/
+installer-output/
+*.spec
+__pycache__/
+.pytest_cache/
+projects/
+output/
