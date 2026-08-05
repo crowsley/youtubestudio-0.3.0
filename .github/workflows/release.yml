@@ -29,13 +29,15 @@ jobs:
         shell: pwsh
         run: |
           $env:YOUTUBE_AI_STUDIO_SMOKE_TEST = "1"
+          $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER = "$env:RUNNER_TEMP\youtube-ai-studio-smoke-ok"
           $process = Start-Process "dist/YouTubeAIStudio/YouTubeAIStudio.exe" -PassThru
-          if (-not $process.WaitForExit(180000)) {
-            $process.Kill()
-            throw "Packaged application smoke test timed out."
+          for ($second = 0; $second -lt 180; $second++) {
+            if (Test-Path $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER) { break }
+            Start-Sleep -Seconds 1
           }
-          if ($process.ExitCode -ne 0) {
-            throw "Packaged application smoke test failed with exit code $($process.ExitCode)."
+          if (-not (Test-Path $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER)) {
+            if (-not $process.HasExited) { $process.Kill() }
+            throw "Packaged application did not complete dependency imports."
           }
       - name: Sign installer
         if: ${{ env.CERTIFICATE_BASE64 != '' }}

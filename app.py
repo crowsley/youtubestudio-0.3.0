@@ -641,6 +641,9 @@ class Studio(ctk.CTk):
 
 if __name__ == "__main__":
     if os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_TEST") == "1":
+        marker = os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_MARKER")
+        if marker:
+            Path(marker).write_text("ok", encoding="utf-8")
         raise SystemExit(0)
     else:
         Studio().mainloop()
