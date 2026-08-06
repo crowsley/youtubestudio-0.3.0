@@ -1,13 +1,13 @@
 # GitHub release setup
 
-This project publishes `YouTube-AI-Studio-Setup.exe` when a version tag is pushed.
+This project publishes `AtoZ-Voice-Studio-Setup.exe` when a version tag is pushed.
 
-1. Commit and push the source to `crowsley/youtubestudio-0.3.0`.
+1. Commit and push the source to `crowsley/atoz-voice-studio`.
 2. Ensure the version in `version.json` and `installer.iss` matches the tag.
 3. Push the release tag:
 
-       git tag v0.5.5
-       git push origin v0.5.5
+       git tag v0.7.0
+       git push origin v0.7.0
 
 GitHub Actions builds the standalone app, creates the installer and attaches it to the release.
 

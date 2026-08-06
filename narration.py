@@ -257,7 +257,7 @@ def combine_wavs(inputs: list[Path], output: Path, silence_seconds: float = 0.25
 
 class WindowsAudioPlayer:
     def __init__(self):
-        self.alias = "youtube_ai_studio_audio"
+        self.alias = "atoz_voice_studio_audio"
         self.path = ""
 
     def _send(self, command: str) -> str:

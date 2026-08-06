@@ -30,30 +30,30 @@ jobs:
       - name: Smoke test packaged application
         shell: pwsh
         run: |
-          $env:YOUTUBE_AI_STUDIO_SMOKE_TEST = "1"
-          $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER = "$env:RUNNER_TEMP\youtube-ai-studio-smoke-ok"
-          $process = Start-Process "dist/YouTubeAIStudio/YouTubeAIStudio.exe" -PassThru
+          $env:ATOZ_VOICE_STUDIO_SMOKE_TEST = "1"
+          $env:ATOZ_VOICE_STUDIO_SMOKE_MARKER = "$env:RUNNER_TEMP\atoz-voice-studio-smoke-ok"
+          $process = Start-Process "dist/AtoZVoiceStudio/AtoZVoiceStudio.exe" -PassThru
           for ($second = 0; $second -lt 180; $second++) {
-            if (Test-Path $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER) { break }
-            if (Test-Path "$env:YOUTUBE_AI_STUDIO_SMOKE_MARKER.error") {
-              Get-Content "$env:YOUTUBE_AI_STUDIO_SMOKE_MARKER.error"
+            if (Test-Path $env:ATOZ_VOICE_STUDIO_SMOKE_MARKER) { break }
+            if (Test-Path "$env:ATOZ_VOICE_STUDIO_SMOKE_MARKER.error") {
+              Get-Content "$env:ATOZ_VOICE_STUDIO_SMOKE_MARKER.error"
               throw "Packaged application dependency import failed."
             }
             Start-Sleep -Seconds 1
           }
-          if (-not (Test-Path $env:YOUTUBE_AI_STUDIO_SMOKE_MARKER)) {
+          if (-not (Test-Path $env:ATOZ_VOICE_STUDIO_SMOKE_MARKER)) {
             if (-not $process.HasExited) { $process.Kill() }
             throw "Packaged application did not complete dependency imports."
           }
       - name: Smoke test packaged updater paths
         shell: pwsh
         run: |
-          $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_TEST = "1"
-          $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_MARKER = "$env:RUNNER_TEMP\youtube-ai-studio-updater-smoke.json"
-          & .\dist\YouTubeAIStudio\YouTubeAIStudioUpdater.exe
-          $result = Get-Content $env:YOUTUBE_AI_STUDIO_UPDATER_SMOKE_MARKER | ConvertFrom-Json
+          $env:ATOZ_VOICE_STUDIO_UPDATER_SMOKE_TEST = "1"
+          $env:ATOZ_VOICE_STUDIO_UPDATER_SMOKE_MARKER = "$env:RUNNER_TEMP\atoz-voice-studio-updater-smoke.json"
+          & .\dist\AtoZVoiceStudio\AtoZVoiceStudioUpdater.exe
+          $result = Get-Content $env:ATOZ_VOICE_STUDIO_UPDATER_SMOKE_MARKER | ConvertFrom-Json
           $expected = (Get-Content .\version.json | ConvertFrom-Json).version
-          if ($result.version -ne $expected -or $result.config -ne "youtubestudio-0.3.0") {
+          if ($result.version -ne $expected -or $result.config -ne "atoz-voice-studio") {
             throw "Packaged updater could not read installed version/config files."
           }
       - name: Sign installer
@@ -61,8 +61,10 @@ jobs:
         shell: pwsh
         run: |
           [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:CERTIFICATE_PASSWORD installer-output/YouTube-AI-Studio-Setup.exe
+          & signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f certificate.pfx /p $env:CERTIFICATE_PASSWORD installer-output/AtoZ-Voice-Studio-Setup.exe
       - uses: softprops/action-gh-release@v2
         with:
-          files: installer-output/YouTube-AI-Studio-Setup.exe
+          files: |
+            installer-output/AtoZ-Voice-Studio-Setup.exe
+            installer-output/YouTube-AI-Studio-Setup.exe
           generate_release_notes: true

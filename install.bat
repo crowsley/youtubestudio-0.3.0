@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo =============================================
-echo       YouTube AI Studio - Installer
+echo       AtoZ Voice Studio - Installer
 echo =============================================
 echo.
 
@@ -27,13 +27,13 @@ echo Updating Python installer tools...
 python -m pip install --upgrade pip setuptools wheel
 if errorlevel 1 goto :failed
 
-echo Installing YouTube AI Studio...
+echo Installing AtoZ Voice Studio...
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :failed
 
 echo.
 echo Installation completed.
-echo Double-click run_app.bat to open YouTube AI Studio.
+echo Double-click run_app.bat to open AtoZ Voice Studio.
 pause
 exit /b 0
 
@@ -42,4 +42,3 @@ echo.
 echo Installation failed. Copy the error shown above.
 pause
 exit /b 1
-

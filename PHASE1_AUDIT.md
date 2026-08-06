@@ -14,7 +14,7 @@
 - `connections.py`: cancellable process runner and real Kokoro, ComfyUI, Kling API and FFmpeg checks.
 - `test_phase1.py`: standard-library automated tests with external services mocked where appropriate.
 
-Settings are stored outside projects at `%LOCALAPPDATA%\YouTube AI Studio\settings.json`. Secrets are stored through the Windows credential backend and are never written to settings, project files or logs.
+Settings are stored outside projects at `%LOCALAPPDATA%\AtoZ Voice Studio\settings.json`. Version 0.7 migrates the previous application data folder automatically. Secrets are stored through the Windows credential backend and are never written to settings, project files or logs.
 
 ## Scope
 
