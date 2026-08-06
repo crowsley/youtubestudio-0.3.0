@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.6.1 - VibeVoice narration
+## Version 0.6.2 - VibeVoice narration
 
 - Project, script and scene management
 - Local Kokoro narration generation
@@ -28,6 +28,10 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 ## VibeVoice Realtime
 
 Run `run_vibevoice_realtime.bat`, then select **VibeVoice Realtime** in the Voice tab. The server URL, model, default voice and timeout are configurable in Settings. Kokoro remains the fast default and works without the VibeVoice server.
+
+## License
+
+YouTube AI Studio is free community software released under the [MIT License](LICENSE). You may use, modify and redistribute it, including commercially, while retaining the copyright and licence notice. Third-party models and components retain their own licences.
 
 ## Development
 
