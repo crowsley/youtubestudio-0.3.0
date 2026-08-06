@@ -31,6 +31,7 @@ from narration import KokoroNarrationProvider, VibeVoiceNarrationProvider, Windo
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
 APP_NAME = "YouTube AI Studio"
+PROJECT_URL = "https://github.com/crowsley/youtubestudio-0.3.0"
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", BASE_DIR)) / APP_NAME
 PROJECTS_DIR = USER_DATA_DIR / "projects"
@@ -533,6 +534,18 @@ class Studio(ctk.CTk):
             ("Copy report", self.copy_diagnostics),
             ("Open logs folder", lambda: self.open_setting_path("general.logs_dir")),
             ("Clear temporary files", self.clear_temporary_files),
+        ])
+
+        about = self._settings_section(page, "About", 8, f"{APP_NAME} v{self.version}")
+        ctk.CTkLabel(
+            about,
+            text="Free community software under the MIT License.\nA local production studio for YouTube videos, narration and audiobooks. Built with Kokoro, VibeVoice and other open-source components; third-party components retain their own licences.",
+            justify="left", wraplength=760,
+        ).grid(row=1, column=0, columnspan=3, padx=12, pady=8, sticky="w")
+        self._button_row(about, 2, [
+            ("Open GitHub", lambda: webbrowser.open(PROJECT_URL)),
+            ("Releases", lambda: webbrowser.open(f"{PROJECT_URL}/releases")),
+            ("Report an issue", lambda: webbrowser.open(f"{PROJECT_URL}/issues")),
         ])
         self.refresh_diagnostics()
 
