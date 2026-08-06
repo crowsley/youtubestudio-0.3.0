@@ -1,8 +1,8 @@
-# YouTube AI Studio
+# AtoZ Voice Studio
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.6.2 - VibeVoice narration
+## Version 0.7.0 - New community name
 
 - Project, script and scene management
 - Local Kokoro narration generation
@@ -11,7 +11,7 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 - DaVinci Resolve production-pack export
 - Standalone Windows application and Inno Setup installer
 - Start Menu, optional desktop shortcut and uninstaller
-- Projects stored safely in `%LOCALAPPDATA%\YouTube AI Studio`
+- Projects stored safely in `%LOCALAPPDATA%\AtoZ Voice Studio`
 - Installer-based updates from GitHub Releases
 - Persistent Settings and first-launch setup report
 - Real Kokoro WAV, ComfyUI image and FFmpeg MP4 connection tests
@@ -31,7 +31,7 @@ Run `run_vibevoice_realtime.bat`, then select **VibeVoice Realtime** in the Voic
 
 ## License
 
-YouTube AI Studio is free community software released under the [MIT License](LICENSE). You may use, modify and redistribute it, including commercially, while retaining the copyright and licence notice. Third-party models and components retain their own licences.
+AtoZ Voice Studio is free community software released under the [MIT License](LICENSE). You may use, modify and redistribute it, including commercially, while retaining the copyright and licence notice. Third-party models and components retain their own licences.
 
 ## Development
 
@@ -41,6 +41,6 @@ Run `install.bat`, then `run_app.bat`.
 
 Install Inno Setup 6, then run `build_exe.bat`. The finished installer is written to:
 
-    installer-output\YouTube-AI-Studio-Setup.exe
+    installer-output\AtoZ-Voice-Studio-Setup.exe
 
 Users of the installer do not need Python.

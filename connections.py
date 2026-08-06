@@ -121,7 +121,7 @@ def test_kokoro(config: dict, output_dir: Path, generate: bool = True) -> dict:
     wav_path = output_dir / "kokoro_connection_test.wav"
     code = "import sys; from kokoro import KPipeline; import numpy as np, soundfile as sf; "
     if generate:
-        code += f"p=KPipeline(lang_code={config.get('language', 'b')!r}, repo_id={config.get('model_repo', 'hexgrad/Kokoro-82M')!r}); parts=[np.asarray(a,dtype=np.float32) for _,_,a in p('Testing YouTube AI Studio voice generation.', voice={config.get('voice', 'bf_emma')!r}, speed={float(config.get('speed', 1.0))!r})]; sf.write({str(wav_path)!r}, np.concatenate(parts), 24000); print({str(wav_path)!r})"
+        code += f"p=KPipeline(lang_code={config.get('language', 'b')!r}, repo_id={config.get('model_repo', 'hexgrad/Kokoro-82M')!r}); parts=[np.asarray(a,dtype=np.float32) for _,_,a in p('Testing AtoZ Voice Studio generation.', voice={config.get('voice', 'bf_emma')!r}, speed={float(config.get('speed', 1.0))!r})]; sf.write({str(wav_path)!r}, np.concatenate(parts), 24000); print({str(wav_path)!r})"
     else:
         code += "import numpy, soundfile, misaki, phonemizer; print('Kokoro imports OK')"
     command = [str(python), "-c", code]
@@ -259,8 +259,9 @@ def test_ffmpeg(config: dict, temp_dir: Path) -> dict:
 class CredentialStore:
     """Windows Credential Manager wrapper; tests can replace this class."""
 
-    def __init__(self, service: str = "YouTube AI Studio") -> None:
+    def __init__(self, service: str = "AtoZ Voice Studio") -> None:
         self.service = service
+        self.legacy_service = "YouTube AI Studio" if service == "AtoZ Voice Studio" else None
 
     def set(self, name: str, secret: str) -> None:
         import keyring
@@ -270,7 +271,7 @@ class CredentialStore:
     def get(self, name: str) -> str:
         import keyring
 
-        return keyring.get_password(self.service, name) or ""
+        return keyring.get_password(self.service, name) or (keyring.get_password(self.legacy_service, name) if self.legacy_service else "") or ""
 
     def delete(self, name: str) -> None:
         import keyring

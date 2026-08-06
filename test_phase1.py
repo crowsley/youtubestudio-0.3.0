@@ -11,10 +11,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from connections import CredentialStore, ProcessRunner, detect_ffmpeg, detect_python, normalize_url, validate_workflow
-from settings import SCHEMA_VERSION, SettingsStore, default_settings, redact, validate_directory
+from settings import DATA_DIR, LEGACY_DATA_DIR, SCHEMA_VERSION, SettingsStore, _migrate_paths, default_settings, redact, validate_directory
 
 
 class SettingsTests(unittest.TestCase):
+    def test_legacy_brand_paths_are_migrated(self):
+        old = str(LEGACY_DATA_DIR / "projects" / "book")
+        self.assertEqual(_migrate_paths({"path": old})["path"], str(DATA_DIR / "projects" / "book"))
+
     def test_persistence_and_migration(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "settings.json"

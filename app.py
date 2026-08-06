@@ -30,8 +30,8 @@ from connections import CredentialStore, detect_ffmpeg, detect_python, test_comf
 from narration import KokoroNarrationProvider, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
-APP_NAME = "YouTube AI Studio"
-PROJECT_URL = "https://github.com/crowsley/youtubestudio-0.3.0"
+APP_NAME = "AtoZ Voice Studio"
+PROJECT_URL = "https://github.com/crowsley/atoz-voice-studio"
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", BASE_DIR)) / APP_NAME
 PROJECTS_DIR = USER_DATA_DIR / "projects"
@@ -121,7 +121,7 @@ class Studio(ctk.CTk):
 
         ctk.CTkLabel(
             sidebar,
-            text="YouTube\nAI Studio",
+            text="AtoZ\nVoice Studio",
             justify="left",
             font=ctk.CTkFont(size=28, weight="bold"),
         ).pack(anchor="w", padx=22, pady=(24, 4))
@@ -169,7 +169,7 @@ class Studio(ctk.CTk):
         ctk.CTkLabel(top, text="Project title").grid(
             row=0, column=0, padx=(16, 8), pady=14
         )
-        self.project_title = ctk.CTkEntry(top, placeholder_text="My first YouTube video")
+        self.project_title = ctk.CTkEntry(top, placeholder_text="My first project")
         self.project_title.grid(row=0, column=1, padx=(0, 12), pady=14, sticky="ew")
 
         self.status = ctk.CTkLabel(top, text="No project loaded", width=220)
@@ -797,7 +797,7 @@ class Studio(ctk.CTk):
         window.title("First-launch setup")
         window.geometry("680x500")
         window.transient(self)
-        ctk.CTkLabel(window, text="YouTube AI Studio setup", font=ctk.CTkFont(size=24, weight="bold")).pack(anchor="w", padx=20, pady=(20, 6))
+        ctk.CTkLabel(window, text="AtoZ Voice Studio setup", font=ctk.CTkFont(size=24, weight="bold")).pack(anchor="w", padx=20, pady=(20, 6))
         python = detect_python(self.settings["kokoro"]["install_dir"])
         ffmpeg, _ = detect_ffmpeg()
         checks = []
@@ -820,7 +820,7 @@ class Studio(ctk.CTk):
         ctk.CTkButton(bar, text="Skip optional services", command=lambda: (self.settings_store.save(self.settings), window.destroy())).pack(side="right")
 
     def new_project(self) -> None:
-        title = self.project_title.get().strip() or "My YouTube Video"
+        title = self.project_title.get().strip() or "My Voice Project"
         project_root = Path(self.settings["general"]["project_dir"])
         project_root.mkdir(parents=True, exist_ok=True)
         folder = project_root / safe_name(title)
@@ -846,7 +846,7 @@ class Studio(ctk.CTk):
 
     def open_project(self) -> None:
         selected = filedialog.askdirectory(
-            title="Open YouTube AI Studio project",
+            title="Open AtoZ Voice Studio project",
             initialdir=self.settings["general"]["project_dir"],
         )
         if not selected:
@@ -1299,7 +1299,7 @@ class Studio(ctk.CTk):
             os.startfile(self.current_project_path)
 
     def check_updates(self) -> None:
-        updater_exe = BASE_DIR / "YouTubeAIStudioUpdater.exe"
+        updater_exe = BASE_DIR / "AtoZVoiceStudioUpdater.exe"
         updater_script = BASE_DIR / "check_for_updates.bat"
         if not messagebox.askyesno(APP_NAME, "Check GitHub for an update? If one is available, the project will be saved and the app will close so Windows can replace its files."):
             return
@@ -1315,12 +1315,12 @@ class Studio(ctk.CTk):
             messagebox.showerror(APP_NAME, "Updater files are missing.")
 
 if __name__ == "__main__":
-    if os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_TEST") == "1":
-        marker = os.environ.get("YOUTUBE_AI_STUDIO_SMOKE_MARKER")
+    if os.environ.get("ATOZ_VOICE_STUDIO_SMOKE_TEST") == "1":
+        marker = os.environ.get("ATOZ_VOICE_STUDIO_SMOKE_MARKER")
         if marker:
-            Path(marker).write_text(json.dumps({"version": Studio.load_version(None), "updater": (BASE_DIR / "YouTubeAIStudioUpdater.exe").is_file()}), encoding="utf-8")
+            Path(marker).write_text(json.dumps({"version": Studio.load_version(None), "updater": (BASE_DIR / "AtoZVoiceStudioUpdater.exe").is_file()}), encoding="utf-8")
         raise SystemExit(0)
-    elif os.environ.get("YOUTUBE_AI_STUDIO_UI_SMOKE_TEST") == "1":
+    elif os.environ.get("ATOZ_VOICE_STUDIO_UI_SMOKE_TEST") == "1":
         studio = Studio()
         studio.update()
         studio.destroy()

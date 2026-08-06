@@ -1,4 +1,4 @@
-# YouTube AI Studio Roadmap
+# AtoZ Voice Studio Roadmap
 
 ## v0.2.0 - Production foundation
 - Projects

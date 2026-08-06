@@ -7,10 +7,18 @@ import tempfile
 from copy import deepcopy
 from pathlib import Path
 
-APP_NAME = "YouTube AI Studio"
+APP_NAME = "AtoZ Voice Studio"
+LEGACY_APP_NAME = "YouTube AI Studio"
 SCHEMA_VERSION = 1
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / APP_NAME
+LEGACY_DATA_DIR = DATA_DIR.parent / LEGACY_APP_NAME
 SETTINGS_FILE = DATA_DIR / "settings.json"
+
+if not DATA_DIR.exists() and LEGACY_DATA_DIR.exists():
+    try:
+        LEGACY_DATA_DIR.rename(DATA_DIR)
+    except OSError:
+        pass
 
 
 def default_settings() -> dict:
@@ -95,6 +103,16 @@ def _merge(default: dict, saved: dict) -> dict:
     return result
 
 
+def _migrate_paths(value):
+    if isinstance(value, dict):
+        return {key: _migrate_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_migrate_paths(item) for item in value]
+    if isinstance(value, str) and value.casefold().startswith(str(LEGACY_DATA_DIR).casefold()):
+        return str(DATA_DIR) + value[len(str(LEGACY_DATA_DIR)):]
+    return value
+
+
 class SettingsStore:
     def __init__(self, path: Path = SETTINGS_FILE):
         self.path = Path(path)
@@ -108,7 +126,7 @@ class SettingsStore:
             saved = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(saved, dict):
                 raise ValueError("settings root must be an object")
-            return _merge(defaults, saved)
+            return _migrate_paths(_merge(defaults, saved))
         except (OSError, ValueError, json.JSONDecodeError):
             self.recovered = True
             backup = self.path.with_suffix(".corrupt.json")
@@ -141,7 +159,7 @@ def validate_directory(value: str, create: bool = True) -> tuple[bool, str]:
             path.mkdir(parents=True, exist_ok=True)
         if not path.is_dir():
             return False, f"Not a directory: {path}"
-        probe = path / ".youtube-ai-studio-write-test"
+        probe = path / ".atoz-voice-studio-write-test"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
         return True, f"Writable: {path}"
