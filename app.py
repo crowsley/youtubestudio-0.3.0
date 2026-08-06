@@ -11,6 +11,11 @@ import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+
+if getattr(sys, "frozen", False):
+    os.environ["TCL_LIBRARY"] = str(Path(sys._MEIPASS) / "_tcl_data")
+    os.environ["TK_LIBRARY"] = str(Path(sys._MEIPASS) / "_tk_data")
+
 from tkinter import filedialog, messagebox, ttk
 
 # Windowed PyInstaller apps have no console streams, but Kokoro configures

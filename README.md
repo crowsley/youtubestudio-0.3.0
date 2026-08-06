@@ -2,7 +2,7 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.6.0 - VibeVoice narration
+## Version 0.6.1 - VibeVoice narration
 
 - Project, script and scene management
 - Local Kokoro narration generation

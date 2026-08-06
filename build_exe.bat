@@ -22,6 +22,7 @@ copy /y version.json "dist\YouTubeAIStudio\"
 copy /y update_config.json "dist\YouTubeAIStudio\"
 set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=%~dp0.tools\InnoSetup6\ISCC.exe"
 if not exist "%ISCC%" (
   echo Inno Setup 6 was not found. Install it from https://jrsoftware.org/isinfo.php
   exit /b 2
