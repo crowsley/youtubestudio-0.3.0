@@ -36,6 +36,12 @@ def default_settings() -> dict:
             "speed": 1.0,
             "timeout": 180,
         },
+        "vibevoice": {
+            "base_url": "http://127.0.0.1:8880",
+            "model": "vibevoice-realtime-0.5b",
+            "voice": "nova",
+            "timeout": 300,
+        },
         "comfyui": {
             "base_url": "http://127.0.0.1:8188",
             "workflow_file": "",

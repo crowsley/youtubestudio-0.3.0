@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
 import wave
@@ -8,8 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from connections import ProcessResult
-from narration import KokoroNarrationProvider, clean_text, combine_wavs, validate_wav
+from narration import KokoroNarrationProvider, VibeVoiceNarrationProvider, clean_text, combine_wavs, normalize_wav, validate_wav
 from narration_adapter import parser
+from unittest.mock import patch
 
 
 def make_wav(path: Path, frames: int = 2400) -> None:
@@ -17,6 +19,14 @@ def make_wav(path: Path, frames: int = 2400) -> None:
     with wave.open(str(path), "wb") as wav:
         wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
         wav.writeframes(b"\0\0" * frames)
+
+
+def wav_bytes(frames: int = 2400) -> bytes:
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as wav:
+        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\1\0" * frames)
+    return stream.getvalue()
 
 
 class FakeRunner:
@@ -122,6 +132,27 @@ class NarrationTests(unittest.TestCase):
             info = combine_wavs([one, two], output, .25)
             self.assertAlmostEqual(info["duration"], .55, places=2)
             self.assertTrue(output.is_file())
+
+    def test_vibevoice_provider_uses_local_speech_api(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def read(self): return wav_bytes()
+        with tempfile.TemporaryDirectory() as folder, patch("urllib.request.urlopen", return_value=Response()) as request:
+            root = Path(folder)
+            result = VibeVoiceNarrationProvider({"base_url": "http://127.0.0.1:8880", "model": "test", "timeout": 2}, root/"log.txt").generate("Hello", "nova", "", 1, root/"voice.wav")
+            self.assertTrue(result.success)
+            self.assertIn("/v1/audio/speech", request.call_args.args[0].full_url)
+
+    def test_normalize_wav_keeps_playable_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"quiet.wav"
+            with wave.open(str(path), "wb") as wav:
+                wav.setparams((1, 2, 24000, 0, "NONE", "not compressed")); wav.writeframes((b"\x10\0\xf0\xff") * 1200)
+            before = path.read_bytes()
+            normalize_wav(path)
+            self.assertNotEqual(path.read_bytes(), before)
+            self.assertGreater(validate_wav(path)["duration"], 0)
 
     def test_atomic_final_does_not_leave_tmp(self):
         with tempfile.TemporaryDirectory() as folder:

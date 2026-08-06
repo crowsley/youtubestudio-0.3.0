@@ -22,7 +22,7 @@ if sys.stdout is None:
 
 import customtkinter as ctk
 from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
-from narration import KokoroNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
+from narration import KokoroNarrationProvider, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 
 APP_NAME = "YouTube AI Studio"
@@ -33,15 +33,16 @@ OUTPUT_DIR = USER_DATA_DIR / "output"
 VERSION_FILE = BASE_DIR / "version.json"
 
 VOICE_OPTIONS = {
-    "British Female - Emma": ("b", "bf_emma"),
-    "British Female - Isabella": ("b", "bf_isabella"),
-    "British Male - George": ("b", "bm_george"),
-    "British Male - Lewis": ("b", "bm_lewis"),
-    "American Female - Heart": ("a", "af_heart"),
-    "American Female - Bella": ("a", "af_bella"),
-    "American Male - Michael": ("a", "am_michael"),
-    "American Male - Puck": ("a", "am_puck"),
+    "American Female - Heart (A)": ("a", "af_heart"),
+    "American Female - Bella (A-)": ("a", "af_bella"),
+    "British Female - Emma (B-)": ("b", "bf_emma"),
+    "British Female - Isabella (C)": ("b", "bf_isabella"),
+    "British Male - George (C)": ("b", "bm_george"),
+    "British Male - Lewis (D+)": ("b", "bm_lewis"),
+    "American Male - Michael (C+)": ("a", "am_michael"),
+    "American Male - Puck (C+)": ("a", "am_puck"),
 }
+VIBEVOICE_OPTIONS = {name.title(): ("", name) for name in ("alloy", "echo", "fable", "onyx", "nova", "shimmer")}
 
 PROJECT_FOLDERS = [
     "01_script",
@@ -280,25 +281,29 @@ class Studio(ctk.CTk):
 
         self.voice_badge = ctk.CTkLabel(settings, text="Not generated", corner_radius=8, fg_color=("gray75", "gray30"), width=120)
         self.voice_badge.grid(row=0, column=0, padx=12, pady=12)
-        ctk.CTkLabel(settings, text="Voice").grid(row=0, column=1, padx=(8, 4))
+        ctk.CTkLabel(settings, text="Engine").grid(row=0, column=1, padx=(8, 4))
+        self.voice_engine = ctk.CTkOptionMenu(settings, values=["Kokoro", "VibeVoice Realtime"], command=self.change_voice_engine, width=150)
+        self.voice_engine.set("Kokoro")
+        self.voice_engine.grid(row=0, column=2, padx=4, pady=12)
+        ctk.CTkLabel(settings, text="Voice").grid(row=0, column=3, padx=(8, 4))
         self.voice_menu = ctk.CTkOptionMenu(
             settings, values=list(VOICE_OPTIONS), width=230
         )
-        self.voice_menu.set("British Female - Emma")
-        self.voice_menu.grid(row=0, column=2, padx=4, pady=12)
+        self.voice_menu.set("American Female - Heart (A)")
+        self.voice_menu.grid(row=0, column=4, padx=4, pady=12)
 
-        ctk.CTkLabel(settings, text="Language").grid(row=0, column=3, padx=(12, 4))
+        ctk.CTkLabel(settings, text="Language").grid(row=0, column=5, padx=(12, 4))
         self.voice_language = ctk.CTkOptionMenu(settings, values=["b", "a"], width=70)
-        self.voice_language.set("b")
-        self.voice_language.grid(row=0, column=4, padx=4)
-        ctk.CTkLabel(settings, text="Speed").grid(row=0, column=5, padx=(12, 4))
+        self.voice_language.set("a")
+        self.voice_language.grid(row=0, column=6, padx=4)
+        ctk.CTkLabel(settings, text="Speed").grid(row=0, column=7, padx=(12, 4))
         self.speed = ctk.DoubleVar(value=1.0)
         ctk.CTkSlider(
             settings, from_=0.7, to=1.3, number_of_steps=12,
             variable=self.speed, width=140
-        ).grid(row=0, column=6, padx=4)
+        ).grid(row=0, column=8, padx=4)
         self.speed_readout = ctk.CTkLabel(settings, textvariable=self.speed, width=60)
-        self.speed_readout.grid(row=0, column=7, padx=4)
+        self.speed_readout.grid(row=0, column=9, padx=4)
 
         buttons = ctk.CTkFrame(tab)
         buttons.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
@@ -333,6 +338,12 @@ class Studio(ctk.CTk):
         self.audio_volume.pack(side="left", padx=8)
         self.audio_details = ctk.CTkLabel(player, text="No audio loaded")
         self.audio_details.pack(side="left", padx=8)
+
+    def change_voice_engine(self, engine: str) -> None:
+        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
+        self.voice_menu.configure(values=list(options))
+        self.voice_menu.set(next(iter(options)))
+        self.voice_language.configure(state="disabled" if engine == "VibeVoice Realtime" else "normal")
 
     def create_prompts_tab(self) -> None:
         tab = self.tabs.add("Kling & Images")
@@ -441,7 +452,14 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("kokoro")),
         ])
 
-        comfy = self._settings_section(page, "ComfyUI", 2, "Connected requires a successful generated image")
+        vibevoice = self._settings_section(page, "VibeVoice Realtime", 2, "Optional expressive local TTS server; designed for low-VRAM CUDA")
+        self._setting_entry(vibevoice, 1, "Base URL", "vibevoice.base_url")
+        self._setting_entry(vibevoice, 2, "Model", "vibevoice.model")
+        self._setting_entry(vibevoice, 3, "Default voice", "vibevoice.voice")
+        self._setting_entry(vibevoice, 4, "Request timeout", "vibevoice.timeout")
+        self._button_row(vibevoice, 5, [("Open server", lambda: webbrowser.open(self._entry_value("vibevoice.base_url")))])
+
+        comfy = self._settings_section(page, "ComfyUI", 3, "Connected requires a successful generated image")
         self._status_badge(comfy, "comfyui")
         fields = [
             ("Base URL", "comfyui.base_url", None), ("Workflow JSON", "comfyui.workflow_file", "file"),
@@ -461,7 +479,7 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("comfyui")),
         ])
 
-        kling = self._settings_section(page, "Kling", 3, "Manual Import never reports Connected")
+        kling = self._settings_section(page, "Kling", 4, "Manual Import never reports Connected")
         self._status_badge(kling, "kling", "Manual mode")
         self._setting_option(kling, 1, "Mode", "kling.mode", ["Manual Import", "Official API"])
         for row, (label, key, secret) in enumerate([
@@ -477,7 +495,7 @@ class Studio(ctk.CTk):
             ("Open import folder", lambda: self.open_setting_path("kling.import_dir")),
         ])
 
-        ffmpeg = self._settings_section(page, "FFmpeg", 4, "Connected requires creating and probing a real MP4")
+        ffmpeg = self._settings_section(page, "FFmpeg", 5, "Connected requires creating and probing a real MP4")
         self._status_badge(ffmpeg, "ffmpeg")
         self._setting_entry(ffmpeg, 1, "FFmpeg executable", "ffmpeg.ffmpeg", browse="file")
         self._setting_entry(ffmpeg, 2, "FFprobe executable", "ffmpeg.ffprobe", browse="file")
@@ -488,7 +506,7 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("ffmpeg")),
         ])
 
-        output = self._settings_section(page, "Output", 5, "Production defaults")
+        output = self._settings_section(page, "Output", 6, "Production defaults")
         output_fields = [
             ("Project root", "output.project_root", "directory"), ("Export directory", "output.export_dir", "directory"),
             ("Cache directory", "output.cache_dir", "directory"), ("Temporary directory", "output.temp_dir", "directory"),
@@ -501,7 +519,7 @@ class Studio(ctk.CTk):
         for row, (label, key, browse) in enumerate(output_fields, 1):
             self._setting_entry(output, row, label, key, browse=browse)
 
-        diagnostics = self._settings_section(page, "Diagnostics", 6, "Truthful service status and redacted logs")
+        diagnostics = self._settings_section(page, "Diagnostics", 7, "Truthful service status and redacted logs")
         self.diagnostics_box = ctk.CTkTextbox(diagnostics, height=180)
         self.diagnostics_box.grid(row=1, column=0, columnspan=3, padx=10, pady=8, sticky="ew")
         self._button_row(diagnostics, 2, [
@@ -836,7 +854,11 @@ class Studio(ctk.CTk):
         self.script_box.insert("1.0", data.get("script", ""))
         self.scenes = [self.migrate_scene(scene) for scene in data.get("scenes", [])]
         self.project_narration = data.get("narration", {})
-        if data.get("voice") in VOICE_OPTIONS:
+        engine = data.get("voice_engine", "Kokoro")
+        self.voice_engine.set(engine)
+        self.change_voice_engine(engine)
+        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
+        if data.get("voice") in options:
             self.voice_menu.set(data["voice"])
         self.speed.set(float(data.get("speed", 1.0)))
         self.repair_audio_state()
@@ -856,6 +878,7 @@ class Studio(ctk.CTk):
             "title": self.project_title.get().strip(),
             "script": self.script_box.get("1.0", "end-1c"),
             "scenes": self.scenes,
+            "voice_engine": self.voice_engine.get(),
             "voice": self.voice_menu.get(),
             "speed": float(self.speed.get()),
             "narration": self.project_narration,
@@ -1034,23 +1057,26 @@ class Studio(ctk.CTk):
         if self.generating:
             return
         if not preview_text and not combine and not self.validate_voice_request(indexes): return
-        config = dict(self.settings["kokoro"])
+        engine = self.voice_engine.get()
+        config = dict(self.settings["vibevoice" if engine == "VibeVoice Realtime" else "kokoro"])
         label = self.voice_menu.get()
-        _, voice_id = VOICE_OPTIONS[label]
-        language, speed = self.voice_language.get(), float(self.speed.get())
+        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
+        language, voice_id = options[label]
+        language, speed = language or self.voice_language.get(), float(self.speed.get())
         self.generating = True
         self.failed_voice_indexes = []
         self.set_voice_busy(True, "Validating", 0)
         self.voice_log.delete("1.0", "end")
         thread = threading.Thread(
-            target=self.voice_worker, args=(indexes, config, voice_id, language, speed, regenerate, preview_text, combine), daemon=True
+            target=self.voice_worker, args=(indexes, config, engine, voice_id, language, speed, regenerate, preview_text, combine), daemon=True
         )
         thread.start()
 
-    def voice_worker(self, indexes: list[int], config: dict, voice_id: str, language: str, speed: float, regenerate: bool, preview_text: str, combine: bool) -> None:
+    def voice_worker(self, indexes: list[int], config: dict, engine: str, voice_id: str, language: str, speed: float, regenerate: bool, preview_text: str, combine: bool) -> None:
         project = self.current_project_path
         log_file = project / "logs" / "voice-generation.log"
-        self.voice_provider = KokoroNarrationProvider(config, log_file)
+        provider_type = VibeVoiceNarrationProvider if engine == "VibeVoice Realtime" else KokoroNarrationProvider
+        self.voice_provider = provider_type(config, log_file)
         started, completed, skipped = time.monotonic(), 0, 0
         try:
             if preview_text:

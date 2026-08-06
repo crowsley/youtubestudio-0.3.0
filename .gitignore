@@ -7,3 +7,7 @@ __pycache__/
 .pytest_cache/
 projects/
 output/
+/.cache/
+/.tools/
+/vibevoice/
+/vibevoice-realtime-openai-api/

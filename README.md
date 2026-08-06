@@ -2,10 +2,11 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.5.5 - Phase 2 Narration
+## Version 0.6.0 - VibeVoice narration
 
 - Project, script and scene management
 - Local Kokoro narration generation
+- Optional VibeVoice Realtime 0.5B narration through a local OpenAI-compatible server
 - Kling and ComfyUI prompt storage
 - DaVinci Resolve production-pack export
 - Standalone Windows application and Inno Setup installer
@@ -21,6 +22,12 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 - Validated atomic audio output and resume/retry state in project files
 - Built-in Windows playback with play, pause, stop, replay, seek and volume
 - Optimized batch narration loads Kokoro once for all queued scenes
+- Published Kokoro voice-quality grades in the voice picker
+- Consistent -19 dBFS narration mastering when scene WAVs are combined
+
+## VibeVoice Realtime
+
+Run `run_vibevoice_realtime.bat`, then select **VibeVoice Realtime** in the Voice tab. The server URL, model, default voice and timeout are configurable in Settings. Kokoro remains the fast default and works without the VibeVoice server.
 
 ## Development
 

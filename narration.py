@@ -7,7 +7,10 @@ import re
 import tempfile
 import time
 import unicodedata
+import urllib.error
+import urllib.request
 import wave
+from array import array
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -160,6 +163,76 @@ class KokoroNarrationProvider:
         with self.log_file.open("a", encoding="utf-8") as log: log.write(record)
 
 
+class VibeVoiceNarrationProvider:
+    def __init__(self, config: dict, log_file: Path):
+        self.config, self.log_file, self.cancelled = config, log_file, False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def generate(self, text: str, voice: str, language: str, speed: float, output: Path, on_event: Callable[[dict], None] | None = None) -> NarrationResult:
+        started, text = time.monotonic(), clean_text(text)
+        if not text:
+            return NarrationResult(False, error="Narration text is empty")
+        if self.cancelled:
+            return NarrationResult(False, error="Generation cancelled", cancelled=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(output.stem + ".tmp.wav")
+        temporary.unlink(missing_ok=True)
+        base_url = str(self.config.get("base_url", "http://127.0.0.1:8880")).rstrip("/")
+        payload = json.dumps({
+            "model": self.config.get("model", "vibevoice-realtime-0.5b"),
+            "input": text,
+            "voice": voice,
+            "response_format": "wav",
+            "speed": speed,
+        }).encode("utf-8")
+        request = urllib.request.Request(f"{base_url}/v1/audio/speech", data=payload, headers={"Content-Type": "application/json", "Accept": "audio/wav"})
+        if on_event:
+            on_event({"event": "stage", "stage": "generating_with_vibevoice"})
+        try:
+            with urllib.request.urlopen(request, timeout=float(self.config.get("timeout", 300))) as response:
+                temporary.write_bytes(response.read())
+            info = validate_wav(temporary)
+            os.replace(temporary, output)
+            return NarrationResult(True, output=str(output), duration=info["duration"], file_size=info["file_size"], sample_rate=info["sample_rate"], channels=info["channels"], exit_code=0, elapsed=time.monotonic()-started)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"VibeVoice HTTP {exc.code}: {detail}")
+        except Exception as exc:
+            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"VibeVoice request failed: {exc}")
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def generate_batch(self, jobs: list[dict], voice: str, language: str, speed: float, on_event: Callable[[dict], None] | None = None) -> dict[int, NarrationResult]:
+        results = {}
+        for current, job in enumerate(jobs, 1):
+            if on_event:
+                on_event({"event": "item_start", "index": job["index"], "current": current, "total": len(jobs)})
+            results[job["index"]] = self.generate(job["text"], voice, language, speed, Path(job["output"]), on_event)
+            if self.cancelled:
+                break
+        return results
+
+
+def normalize_wav(path: Path, target_dbfs: float = -19.0, peak_dbfs: float = -1.0) -> None:
+    with wave.open(str(path), "rb") as source:
+        params, frames = source.getparams(), source.readframes(source.getnframes())
+    if params.sampwidth != 2:
+        return
+    samples = array("h"); samples.frombytes(frames)
+    if not samples:
+        return
+    rms = (sum(value * value for value in samples) / len(samples)) ** 0.5
+    peak = max(abs(value) for value in samples)
+    if not rms or not peak:
+        return
+    gain = min((32767 * 10 ** (target_dbfs / 20)) / rms, (32767 * 10 ** (peak_dbfs / 20)) / peak)
+    mastered = array("h", (max(-32768, min(32767, round(value * gain))) for value in samples))
+    with wave.open(str(path), "wb") as target:
+        target.setparams(params); target.writeframes(mastered.tobytes())
+
+
 def combine_wavs(inputs: list[Path], output: Path, silence_seconds: float = 0.25) -> dict:
     if not inputs: raise ValueError("No scene narration files are available")
     details = [validate_wav(path) for path in inputs]
@@ -175,6 +248,7 @@ def combine_wavs(inputs: list[Path], output: Path, silence_seconds: float = 0.25
                     raise ValueError("Scene WAV formats do not match")
                 target.writeframes(source.readframes(source.getnframes()))
             if index + 1 < len(inputs): target.writeframes(silence)
+    normalize_wav(temporary)
     info = validate_wav(temporary)
     os.replace(temporary, output)
     info["path"] = str(output)
