@@ -1,5 +1,5 @@
 #define AppName "AtoZ Voice Studio"
-#define AppVersion "0.7.0"
+#define AppVersion "0.7.1"
 #define AppPublisher "crowsley"
 #define AppExeName "AtoZVoiceStudio.exe"
 

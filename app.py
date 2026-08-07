@@ -49,6 +49,8 @@ VOICE_OPTIONS = {
     "American Male - Puck (C+)": ("a", "am_puck"),
 }
 VIBEVOICE_OPTIONS = {name.title(): ("", name) for name in ("alloy", "echo", "fable", "onyx", "nova", "shimmer")}
+LANGUAGE_CODES = {"American English": "a", "British English": "b"}
+LANGUAGE_LABELS = {code: label for label, code in LANGUAGE_CODES.items()}
 
 PROJECT_FOLDERS = [
     "01_script",
@@ -61,10 +63,34 @@ PROJECT_FOLDERS = [
     "08_export",
 ]
 
+WORKFLOW_STEPS = [
+    ("1. Plan the video", "Script"),
+    ("2. Build scenes", "Scenes"),
+    ("3. Generate voice", "Voice"),
+    ("4. Create Kling clips", "Scenes"),
+    ("5. Export to DaVinci", "Export"),
+]
+
 def safe_name(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*]+', "", value.strip())
     value = re.sub(r"\s+", "_", value)
     return value[:80] or "untitled_project"
+
+def estimate_seconds(text: str, speed: float = 1.0) -> float:
+    words = len(re.findall(r"\w+", text or ""))
+    # ponytail: ~150 wpm heuristic; replace with measured audioDuration when available
+    return round(words / max(0.1, 2.5 * max(0.5, speed)), 2)
+
+def format_srt_time(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, ms = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+def csv_cell(value: object) -> str:
+    text = str(value or "")
+    return f'"{text.replace(chr(34), chr(34)+chr(34))}"'
 
 class Studio(ctk.CTk):
     def __init__(self) -> None:
@@ -150,12 +176,20 @@ class Studio(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
         ).pack(anchor="w", padx=22, pady=(26, 6))
 
-        ctk.CTkLabel(
-            sidebar,
-            text="1. Plan the video\n2. Build scenes\n3. Generate voice\n4. Create Kling clips\n5. Export to DaVinci",
-            justify="left",
-            text_color=("gray35", "gray70"),
-        ).pack(anchor="w", padx=22)
+        self.workflow_buttons: list[ctk.CTkButton] = []
+        for label, tab in WORKFLOW_STEPS:
+            button = ctk.CTkButton(
+                sidebar,
+                text=label,
+                anchor="w",
+                height=32,
+                fg_color="transparent",
+                text_color=("gray20", "gray80"),
+                hover_color=("gray80", "gray30"),
+                command=lambda t=tab: self.goto_tab(t),
+            )
+            button.pack(fill="x", padx=14, pady=2)
+            self.workflow_buttons.append(button)
 
         main = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         main.grid(row=0, column=1, sticky="nsew")
@@ -185,28 +219,48 @@ class Studio(ctk.CTk):
         self.create_prompts_tab()
         self.create_export_tab()
         self.create_settings_tab()
+        self.refresh_progress()
+
+    def goto_tab(self, name: str) -> None:
+        try:
+            self.tabs.set(name)
+        except Exception:
+            pass
+        self.refresh_progress()
 
     def create_dashboard_tab(self) -> None:
         tab = self.tabs.add("Dashboard")
         tab.grid_columnconfigure((0, 1, 2), weight=1)
+        self.dashboard_status = ctk.CTkLabel(
+            tab, text="Create or open a project to track progress.",
+            font=ctk.CTkFont(size=15), justify="left",
+        )
+        self.dashboard_status.grid(row=0, column=0, columnspan=3, padx=14, pady=(14, 6), sticky="w")
 
         cards = [
-            ("Script", "Write or paste the full narration."),
-            ("Scenes", "Split the story into manageable visual sections."),
-            ("Voice", "Generate local Kokoro narration files."),
-            ("Kling", "Store copy-ready video-generation prompts."),
-            ("ComfyUI", "Store image and thumbnail prompts."),
-            ("DaVinci", "Prepare organised files for editing."),
+            ("Script", "Script", "Write or paste the full narration."),
+            ("Scenes", "Scenes", "Split and edit scenes with prompts."),
+            ("Voice", "Voice", "Generate local narration files."),
+            ("Kling", "Scenes", "Per-scene video prompts (on Scenes)."),
+            ("Images", "Scenes", "Per-scene image prompts (on Scenes)."),
+            ("Export", "Export", "SRT, duration report and production pack."),
         ]
-        for i, (title, body) in enumerate(cards):
+        self.dashboard_cards: dict[str, ctk.CTkLabel] = {}
+        for i, (title, tab_name, body) in enumerate(cards):
             card = ctk.CTkFrame(tab)
-            card.grid(row=i // 3, column=i % 3, padx=10, pady=10, sticky="nsew")
-            ctk.CTkLabel(
-                card, text=title, font=ctk.CTkFont(size=19, weight="bold")
-            ).pack(anchor="w", padx=16, pady=(16, 5))
-            ctk.CTkLabel(
-                card, text=body, wraplength=260, justify="left"
-            ).pack(anchor="w", padx=16, pady=(0, 18))
+            card.grid(row=1 + i // 3, column=i % 3, padx=10, pady=10, sticky="nsew")
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=19, weight="bold")).pack(
+                anchor="w", padx=16, pady=(16, 5)
+            )
+            status = ctk.CTkLabel(card, text="—", text_color=("gray35", "gray70"))
+            status.pack(anchor="w", padx=16, pady=(0, 4))
+            self.dashboard_cards[title] = status
+            ctk.CTkLabel(card, text=body, wraplength=260, justify="left").pack(
+                anchor="w", padx=16, pady=(0, 8)
+            )
+            ctk.CTkButton(
+                card, text="Open", width=90, command=lambda t=tab_name: self.goto_tab(t)
+            ).pack(anchor="w", padx=16, pady=(0, 16))
 
     def create_script_tab(self) -> None:
         tab = self.tabs.add("Script")
@@ -244,14 +298,18 @@ class Studio(ctk.CTk):
         self.scene_list = ctk.CTkScrollableFrame(left)
         self.scene_list.pack(fill="both", expand=True, padx=8, pady=5)
 
-        ctk.CTkButton(left, text="Add scene", command=self.add_scene).pack(
-            fill="x", padx=12, pady=(6, 12)
-        )
+        list_actions = ctk.CTkFrame(left, fg_color="transparent")
+        list_actions.pack(fill="x", padx=8, pady=(4, 12))
+        ctk.CTkButton(list_actions, text="Add", command=self.add_scene, width=70).pack(side="left", padx=2)
+        ctk.CTkButton(list_actions, text="Up", command=lambda: self.move_scene(-1), width=50).pack(side="left", padx=2)
+        ctk.CTkButton(list_actions, text="Down", command=lambda: self.move_scene(1), width=55).pack(side="left", padx=2)
 
         right = ctk.CTkFrame(tab)
         right.grid(row=0, column=1, padx=(6, 8), pady=8, sticky="nsew")
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(3, weight=1)
+        right.grid_rowconfigure(3, weight=2)
+        right.grid_rowconfigure(5, weight=1)
+        right.grid_rowconfigure(7, weight=1)
 
         ctk.CTkLabel(right, text="Scene title").grid(
             row=0, column=0, padx=14, pady=(14, 4), sticky="w"
@@ -262,25 +320,47 @@ class Studio(ctk.CTk):
         ctk.CTkLabel(right, text="Narration").grid(
             row=2, column=0, padx=14, pady=(4, 4), sticky="w"
         )
-        self.scene_narration = ctk.CTkTextbox(right, wrap="word")
-        self.scene_narration.grid(row=3, column=0, padx=14, pady=(0, 8), sticky="nsew")
+        self.scene_narration = ctk.CTkTextbox(right, wrap="word", height=120)
+        self.scene_narration.grid(row=3, column=0, padx=14, pady=(0, 4), sticky="nsew")
+        self.scene_estimate = ctk.CTkLabel(right, text="Est. 0.0s", text_color=("gray40", "gray70"))
+        self.scene_estimate.grid(row=4, column=0, padx=14, pady=(0, 6), sticky="w")
+
+        prompts = ctk.CTkFrame(right, fg_color="transparent")
+        prompts.grid(row=5, column=0, padx=10, pady=4, sticky="nsew")
+        prompts.grid_columnconfigure((0, 1), weight=1)
+        prompts.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(prompts, text="Kling video prompt", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=0, padx=4, pady=(0, 4), sticky="w"
+        )
+        ctk.CTkLabel(prompts, text="ComfyUI image prompt", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=1, padx=4, pady=(0, 4), sticky="w"
+        )
+        self.kling_prompt = ctk.CTkTextbox(prompts, wrap="word", height=90)
+        self.kling_prompt.grid(row=1, column=0, padx=4, pady=0, sticky="nsew")
+        self.image_prompt = ctk.CTkTextbox(prompts, wrap="word", height=90)
+        self.image_prompt.grid(row=1, column=1, padx=4, pady=0, sticky="nsew")
 
         controls = ctk.CTkFrame(right, fg_color="transparent")
-        controls.grid(row=4, column=0, padx=14, pady=(4, 14), sticky="ew")
+        controls.grid(row=6, column=0, padx=14, pady=(8, 14), sticky="ew")
+        ctk.CTkButton(controls, text="Update scene", command=self.update_selected_scene).pack(side="left")
+        ctk.CTkButton(controls, text="Delete", command=self.delete_selected_scene).pack(side="left", padx=8)
         ctk.CTkButton(
-            controls, text="Update selected scene", command=self.update_selected_scene
-        ).pack(side="left")
+            controls, text="Copy Kling",
+            command=lambda: self.copy_text(self.kling_prompt.get("1.0", "end-1c")),
+        ).pack(side="left", padx=4)
         ctk.CTkButton(
-            controls, text="Delete scene", command=self.delete_selected_scene
-        ).pack(side="left", padx=8)
+            controls, text="Copy image",
+            command=lambda: self.copy_text(self.image_prompt.get("1.0", "end-1c")),
+        ).pack(side="left", padx=4)
 
         self.scenes: list[dict] = []
         self.selected_scene_index: int | None = None
+        self.scene_narration.bind("<KeyRelease>", lambda _e: self.update_scene_estimate())
 
     def create_voice_tab(self) -> None:
         tab = self.tabs.add("Voice")
         tab.grid_columnconfigure(0, weight=1)
-        tab.grid_rowconfigure(4, weight=1)
+        tab.grid_rowconfigure(5, weight=1)
 
         settings = ctk.CTkFrame(tab)
         settings.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
@@ -299,11 +379,12 @@ class Studio(ctk.CTk):
         self.voice_menu.grid(row=0, column=4, padx=4, pady=12)
 
         ctk.CTkLabel(settings, text="Language").grid(row=0, column=5, padx=(12, 4))
-        self.voice_language = ctk.CTkOptionMenu(settings, values=["b", "a"], width=70)
-        self.voice_language.set("a")
+        self.voice_language = ctk.CTkOptionMenu(settings, values=list(LANGUAGE_CODES), width=150)
+        self.voice_language.set("American English")
         self.voice_language.grid(row=0, column=6, padx=4)
         ctk.CTkLabel(settings, text="Speed").grid(row=0, column=7, padx=(12, 4))
         self.speed = ctk.DoubleVar(value=1.0)
+        self.speed.trace_add("write", lambda *_: self.refresh_duration_estimate())
         ctk.CTkSlider(
             settings, from_=0.7, to=1.3, number_of_steps=12,
             variable=self.speed, width=140
@@ -311,30 +392,44 @@ class Studio(ctk.CTk):
         self.speed_readout = ctk.CTkLabel(settings, textvariable=self.speed, width=60)
         self.speed_readout.grid(row=0, column=9, padx=4)
 
-        buttons = ctk.CTkFrame(tab)
-        buttons.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        generate_bar = ctk.CTkFrame(tab)
+        generate_bar.grid(row=1, column=0, padx=10, pady=(4, 2), sticky="ew")
         self.voice_action_buttons = []
         for label, command in [
-            ("Preview text", self.preview_selected_text), ("Generate scene", self.generate_selected_scene),
-            ("Generate all", self.generate_all_scenes), ("Full narration", self.generate_full_narration),
-            ("Retry failed", self.retry_failed_generation), ("Cancel", self.cancel_voice_generation),
-            ("Open folder", self.open_voice_folder), ("Open log", self.open_voice_log),
+            ("Preview text", self.preview_selected_text),
+            ("Generate scene", self.generate_selected_scene),
+            ("Generate all", self.generate_all_scenes),
+            ("Full narration", self.generate_full_narration),
+            ("Retry failed", self.retry_failed_generation),
+            ("Cancel", self.cancel_voice_generation),
         ]:
-            button = ctk.CTkButton(buttons, text=label, command=command, width=115)
-            button.pack(side="left", padx=4, pady=10)
+            button = ctk.CTkButton(generate_bar, text=label, command=command, width=120)
+            button.pack(side="left", padx=4, pady=8)
             self.voice_action_buttons.append(button)
+
+        utility_bar = ctk.CTkFrame(tab)
+        utility_bar.grid(row=2, column=0, padx=10, pady=(2, 6), sticky="ew")
+        for label, command in [
+            ("Open folder", self.open_voice_folder),
+            ("Open log", self.open_voice_log),
+        ]:
+            button = ctk.CTkButton(utility_bar, text=label, command=command, width=120)
+            button.pack(side="left", padx=4, pady=6)
+            self.voice_action_buttons.append(button)
+        self.duration_estimate = ctk.CTkLabel(utility_bar, text="Estimated total: 0.0s")
+        self.duration_estimate.pack(side="left", padx=12)
 
         self.voice_status = ctk.CTkLabel(
             tab, text="Create or open a project before generating narration."
         )
-        self.voice_status.grid(row=2, column=0, padx=14, pady=(6, 2), sticky="w")
+        self.voice_status.grid(row=3, column=0, padx=14, pady=(6, 2), sticky="w")
         self.voice_progress = ctk.CTkProgressBar(tab)
         self.voice_progress.set(0)
-        self.voice_progress.grid(row=3, column=0, padx=14, pady=6, sticky="ew")
+        self.voice_progress.grid(row=4, column=0, padx=14, pady=6, sticky="ew")
         self.voice_log = ctk.CTkTextbox(tab, height=150, wrap="word")
-        self.voice_log.grid(row=4, column=0, padx=14, pady=6, sticky="nsew")
+        self.voice_log.grid(row=5, column=0, padx=14, pady=6, sticky="nsew")
         player = ctk.CTkFrame(tab)
-        player.grid(row=5, column=0, padx=10, pady=(4, 10), sticky="ew")
+        player.grid(row=6, column=0, padx=10, pady=(4, 10), sticky="ew")
         for label, command in [("Play", self.play_audio), ("Pause", self.pause_audio), ("Stop", self.stop_audio), ("Replay", self.replay_audio), ("Delete scene audio", self.delete_selected_audio)]:
             ctk.CTkButton(player, text=label, command=command, width=105).pack(side="left", padx=4, pady=8)
         self.audio_seek = ctk.CTkSlider(player, from_=0, to=1, command=self.seek_audio, width=170)
@@ -353,38 +448,28 @@ class Studio(ctk.CTk):
 
     def create_prompts_tab(self) -> None:
         tab = self.tabs.add("Kling & Images")
-        tab.grid_columnconfigure((0, 1), weight=1)
-        tab.grid_rowconfigure(1, weight=1)
-
+        tab.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            tab, text="Kling video prompt",
-            font=ctk.CTkFont(size=17, weight="bold")
-        ).grid(row=0, column=0, padx=10, pady=(12, 4), sticky="w")
+            tab, text="Prompts live on the Scenes tab",
+            font=ctk.CTkFont(size=20, weight="bold"),
+        ).grid(row=0, column=0, padx=16, pady=(24, 8), sticky="w")
         ctk.CTkLabel(
-            tab, text="ComfyUI image prompt",
-            font=ctk.CTkFont(size=17, weight="bold")
-        ).grid(row=0, column=1, padx=10, pady=(12, 4), sticky="w")
-
-        self.kling_prompt = ctk.CTkTextbox(tab, wrap="word")
-        self.kling_prompt.grid(row=1, column=0, padx=10, pady=8, sticky="nsew")
-
-        self.image_prompt = ctk.CTkTextbox(tab, wrap="word")
-        self.image_prompt.grid(row=1, column=1, padx=10, pady=8, sticky="nsew")
-
-        controls = ctk.CTkFrame(tab, fg_color="transparent")
-        controls.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+            tab,
+            text="Edit Kling and ComfyUI prompts next to each scene's narration. Use the buttons below for the selected scene.",
+            wraplength=720, justify="left",
+        ).grid(row=1, column=0, padx=16, pady=(0, 16), sticky="w")
+        bar = ctk.CTkFrame(tab, fg_color="transparent")
+        bar.grid(row=2, column=0, padx=16, pady=8, sticky="w")
+        ctk.CTkButton(bar, text="Open Scenes", command=lambda: self.goto_tab("Scenes")).pack(side="left")
         ctk.CTkButton(
-            controls, text="Save prompts to selected scene",
-            command=self.save_scene_prompts
-        ).pack(side="left")
-        ctk.CTkButton(
-            controls, text="Copy Kling prompt",
-            command=lambda: self.copy_text(self.kling_prompt.get("1.0", "end-1c"))
+            bar, text="Copy Kling prompt",
+            command=lambda: self.copy_text(self.kling_prompt.get("1.0", "end-1c")),
         ).pack(side="left", padx=8)
         ctk.CTkButton(
-            controls, text="Copy image prompt",
-            command=lambda: self.copy_text(self.image_prompt.get("1.0", "end-1c"))
+            bar, text="Copy image prompt",
+            command=lambda: self.copy_text(self.image_prompt.get("1.0", "end-1c")),
         ).pack(side="left")
+        ctk.CTkButton(bar, text="Save selected scene", command=self.save_scene_prompts).pack(side="left", padx=8)
 
     def create_export_tab(self) -> None:
         tab = self.tabs.add("Export")
@@ -397,7 +482,7 @@ class Studio(ctk.CTk):
 
         ctk.CTkLabel(
             tab,
-            text="Export scene narration, Kling prompts and ComfyUI prompts into organised files ready for DaVinci Resolve.",
+            text="Export narration paths, prompts, an SRT subtitle file and a duration report into the project folders for DaVinci Resolve.",
             wraplength=800,
             justify="left",
         ).grid(row=1, column=0, padx=16, pady=(0, 18), sticky="w")
@@ -512,14 +597,12 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("ffmpeg")),
         ])
 
-        output = self._settings_section(page, "Output", 6, "Production defaults")
+        output = self._settings_section(page, "Output", 6, "Folders and narration gap (video encode settings removed — app does not render video yet)")
         output_fields = [
-            ("Project root", "output.project_root", "directory"), ("Export directory", "output.export_dir", "directory"),
-            ("Cache directory", "output.cache_dir", "directory"), ("Temporary directory", "output.temp_dir", "directory"),
-            ("Resolution", "output.resolution", None), ("Frame rate", "output.frame_rate", None),
-            ("Transition duration", "output.transition_duration", None), ("Video codec", "output.video_codec", None),
-            ("Hardware encoder", "output.hardware_encoder", None), ("Audio codec", "output.audio_codec", None),
-            ("Output quality", "output.quality", None), ("Overwrite behaviour", "output.overwrite", None),
+            ("Project root", "output.project_root", "directory"),
+            ("Export directory", "output.export_dir", "directory"),
+            ("Cache directory", "output.cache_dir", "directory"),
+            ("Temporary directory", "output.temp_dir", "directory"),
             ("Silence between scenes (seconds)", "narration.silence", None),
         ]
         for row, (label, key, browse) in enumerate(output_fields, 1):
@@ -676,13 +759,31 @@ class Studio(ctk.CTk):
             messagebox.showinfo(f"{name.title()} test", result.get("reason", "Connected"))
 
     def auto_detect_kokoro(self) -> None:
-        install = self._entry_value("kokoro.install_dir") or str(Path.home() / "Downloads" / "Kokoro-TTS")
+        install = self._entry_value("kokoro.install_dir")
+        if not install or not Path(install).is_dir():
+            install = next(
+                (
+                    str(path)
+                    for path in (
+                        Path.home() / "Downloads" / "Kokoro-TTS",
+                        Path.home() / "Kokoro-TTS",
+                        DATA_DIR / "Kokoro-TTS",
+                    )
+                    if path.is_dir()
+                ),
+                "",
+            )
         python = detect_python(install)
         for key, value in (("kokoro.install_dir", install), ("kokoro.python", python)):
             entry = self.setting_entries[key]
             entry.delete(0, "end")
             entry.insert(0, value)
-        self.set_connection_status("kokoro", "Not configured", f"Detected Python: {python or 'none'}; generate a test voice to connect.")
+        note = (
+            f"Detected Python: {python}; generate a test voice to connect."
+            if python
+            else "Kokoro not found. Browse to your Kokoro-TTS folder (often Downloads\\Kokoro-TTS), then Test Kokoro."
+        )
+        self.set_connection_status("kokoro", "Not configured", note)
 
     def test_python_connection(self) -> None:
         self.save_settings_ui()
@@ -806,7 +907,7 @@ class Studio(ctk.CTk):
             checks.append(f"{'Ready' if ok else 'Failed'} - {label}: {reason}")
         checks.extend([
             f"{'Ready' if python else 'Failed'} - Python: {python or 'not detected'}",
-            "Manual setup required - Kokoro: generate a test voice in Settings",
+            "Manual setup required - Kokoro: click Auto-detect or Browse to your Kokoro-TTS folder, then Generate Test Voice",
             "Optional - ComfyUI: configure URL and workflow in Settings",
             "Manual setup required - Kling: defaults to Manual Import",
             f"{'Manual setup required' if not ffmpeg else 'Ready for test'} - FFmpeg: {ffmpeg or 'not detected'}",
@@ -843,15 +944,55 @@ class Studio(ctk.CTk):
         self.script_box.delete("1.0", "end")
         self.status.configure(text=f"Project: {folder.name}")
         self.save_project()
+        self.refresh_progress()
 
     def open_project(self) -> None:
-        selected = filedialog.askdirectory(
-            title="Open AtoZ Voice Studio project",
-            initialdir=self.settings["general"]["project_dir"],
+        root = Path(self.settings["general"]["project_dir"])
+        root.mkdir(parents=True, exist_ok=True)
+        projects = sorted(
+            [p for p in root.iterdir() if p.is_dir() and (p / "project.json").exists()],
+            key=lambda p: (p / "project.json").stat().st_mtime,
+            reverse=True,
         )
-        if not selected:
+        if not projects:
+            selected = filedialog.askdirectory(
+                title="Open AtoZ Voice Studio project",
+                initialdir=str(root),
+            )
+            if selected:
+                self.load_project_path(Path(selected))
             return
-        self.load_project_path(Path(selected))
+
+        window = ctk.CTkToplevel(self)
+        window.title("Open project")
+        window.geometry("520x420")
+        window.transient(self)
+        ctk.CTkLabel(window, text="Recent projects", font=ctk.CTkFont(size=18, weight="bold")).pack(
+            anchor="w", padx=16, pady=(16, 8)
+        )
+        list_frame = ctk.CTkScrollableFrame(window)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=8)
+
+        def choose(path: Path) -> None:
+            window.destroy()
+            self.load_project_path(path)
+
+        for path in projects[:20]:
+            ctk.CTkButton(
+                list_frame, text=path.name, anchor="w", command=lambda p=path: choose(p)
+            ).pack(fill="x", pady=3)
+
+        bar = ctk.CTkFrame(window, fg_color="transparent")
+        bar.pack(fill="x", padx=16, pady=(4, 16))
+
+        def browse() -> None:
+            selected = filedialog.askdirectory(title="Open AtoZ Voice Studio project", initialdir=str(root))
+            if selected:
+                window.destroy()
+                self.load_project_path(Path(selected))
+
+        ctk.CTkButton(bar, text="Browse…", command=browse).pack(side="left")
+        ctk.CTkButton(bar, text="Cancel", command=window.destroy).pack(side="right")
 
     def load_project_path(self, path: Path, quiet: bool = False) -> None:
         project_file = path / "project.json"
@@ -884,6 +1025,7 @@ class Studio(ctk.CTk):
         self.status.configure(text=f"Project: {path.name}")
         self.settings["general"]["last_project"] = str(path)
         self.settings_store.save(self.settings)
+        self.refresh_progress()
 
     def save_project(self) -> None:
         if not self.current_project_path:
@@ -912,6 +1054,7 @@ class Studio(ctk.CTk):
         self.status.configure(text=f"Saved: {self.current_project_path.name}")
         self.settings["general"]["last_project"] = str(self.current_project_path)
         self.settings_store.save(self.settings)
+        self.refresh_progress()
 
     def migrate_scene(self, scene: dict) -> dict:
         migrated = dict(scene)
@@ -960,24 +1103,29 @@ class Studio(ctk.CTk):
                 "kling_prompt": "",
                 "image_prompt": "",
             }))
-        self.refresh_scene_list()
+        self.refresh_scene_list(prefer=0)
         self.tabs.set("Scenes")
+        self.refresh_progress()
 
-    def refresh_scene_list(self) -> None:
+    def refresh_scene_list(self, prefer: int | None = None) -> None:
+        keep = self.selected_scene_index if prefer is None else prefer
+        self.selected_scene_index = None
         for child in self.scene_list.winfo_children():
             child.destroy()
         for index, scene in enumerate(self.scenes):
+            mark = "●" if scene.get("audioStatus") == "Complete" else "○"
             ctk.CTkButton(
                 self.scene_list,
-                text=f"{index+1:02d}  {scene.get('title', 'Untitled')}",
+                text=f"{index+1:02d} {mark}  {scene.get('title', 'Untitled')}",
                 anchor="w",
                 command=lambda idx=index: self.select_scene(idx),
             ).pack(fill="x", pady=3)
         if self.scenes:
-            self.select_scene(0)
+            index = keep if keep is not None and 0 <= keep < len(self.scenes) else 0
+            self.select_scene(index)
         else:
-            self.selected_scene_index = None
             self.clear_scene_fields()
+        self.refresh_duration_estimate()
 
     def select_scene(self, index: int) -> None:
         if self.selected_scene_index is not None:
@@ -993,6 +1141,7 @@ class Studio(ctk.CTk):
         self.image_prompt.delete("1.0", "end")
         self.image_prompt.insert("1.0", scene.get("image_prompt", ""))
         self.voice_badge.configure(text=scene.get("audioStatus", "Not generated"))
+        self.update_scene_estimate()
         if scene.get("audioPath") and Path(scene["audioPath"]).is_file():
             self.load_audio(Path(scene["audioPath"]))
 
@@ -1000,6 +1149,8 @@ class Studio(ctk.CTk):
         for widget in [self.scene_narration, self.kling_prompt, self.image_prompt]:
             widget.delete("1.0", "end")
         self.scene_title.delete(0, "end")
+        if hasattr(self, "scene_estimate"):
+            self.scene_estimate.configure(text="Est. 0.0s")
 
     def capture_selected_scene(self) -> None:
         if self.selected_scene_index is None:
@@ -1012,6 +1163,57 @@ class Studio(ctk.CTk):
         scene["kling_prompt"] = self.kling_prompt.get("1.0", "end-1c").strip()
         scene["image_prompt"] = self.image_prompt.get("1.0", "end-1c").strip()
 
+    def update_scene_estimate(self) -> None:
+        if not hasattr(self, "scene_estimate"):
+            return
+        text = self.scene_narration.get("1.0", "end-1c") if hasattr(self, "scene_narration") else ""
+        speed = float(self.speed.get()) if hasattr(self, "speed") else 1.0
+        measured = 0.0
+        if self.selected_scene_index is not None and self.selected_scene_index < len(self.scenes):
+            measured = float(self.scenes[self.selected_scene_index].get("audioDuration") or 0)
+        seconds = measured or estimate_seconds(text, speed)
+        label = "Audio" if measured else "Est."
+        self.scene_estimate.configure(text=f"{label} {seconds:.1f}s")
+
+    def refresh_duration_estimate(self) -> None:
+        if not hasattr(self, "duration_estimate"):
+            return
+        speed = float(self.speed.get()) if hasattr(self, "speed") else 1.0
+        total = 0.0
+        for scene in self.scenes:
+            measured = float(scene.get("audioDuration") or 0)
+            total += measured or estimate_seconds(scene.get("narration", ""), speed)
+        silence = float(self.settings.get("narration", {}).get("silence", 0.25)) * max(0, len(self.scenes) - 1)
+        self.duration_estimate.configure(text=f"Estimated total: {total + silence:.1f}s")
+        self.update_scene_estimate()
+
+    def refresh_progress(self) -> None:
+        if not hasattr(self, "dashboard_cards"):
+            return
+        script_ok = bool(self.script_box.get("1.0", "end-1c").strip()) if hasattr(self, "script_box") else False
+        scenes_n = len(self.scenes)
+        voice_done = sum(scene.get("audioStatus") == "Complete" for scene in self.scenes)
+        kling_done = sum(bool(scene.get("kling_prompt", "").strip()) for scene in self.scenes)
+        image_done = sum(bool(scene.get("image_prompt", "").strip()) for scene in self.scenes)
+        exported = False
+        if self.current_project_path:
+            exported = (self.current_project_path / "06_davinci" / "production_sheet.csv").exists()
+        statuses = {
+            "Script": "Ready" if script_ok else "Missing",
+            "Scenes": f"{scenes_n} scenes" if scenes_n else "None",
+            "Voice": f"{voice_done}/{scenes_n} done" if scenes_n else "—",
+            "Kling": f"{kling_done}/{scenes_n} prompts" if scenes_n else "—",
+            "Images": f"{image_done}/{scenes_n} prompts" if scenes_n else "—",
+            "Export": "Exported" if exported else "Not exported",
+        }
+        for key, text in statuses.items():
+            self.dashboard_cards[key].configure(text=text)
+        summary = f"{'Project open' if self.current_project_path else 'No project'} · script {'✓' if script_ok else '—'} · scenes {scenes_n} · voice {voice_done}/{scenes_n} · prompts {kling_done}/{scenes_n}"
+        self.dashboard_status.configure(text=summary)
+        done_flags = [script_ok, scenes_n > 0, scenes_n > 0 and voice_done == scenes_n, scenes_n > 0 and kling_done == scenes_n, exported]
+        for button, done in zip(self.workflow_buttons, done_flags):
+            button.configure(text_color=("#0f7b3a" if done else ("gray20", "gray80")))
+
     def add_scene(self) -> None:
         self.capture_selected_scene()
         self.scenes.append(self.migrate_scene({
@@ -1020,20 +1222,34 @@ class Studio(ctk.CTk):
             "kling_prompt": "",
             "image_prompt": "",
         }))
-        self.refresh_scene_list()
-        self.select_scene(len(self.scenes)-1)
+        self.refresh_scene_list(prefer=len(self.scenes) - 1)
+        self.refresh_progress()
+
+    def move_scene(self, delta: int) -> None:
+        if self.selected_scene_index is None:
+            return
+        self.capture_selected_scene()
+        index = self.selected_scene_index
+        target = index + delta
+        if target < 0 or target >= len(self.scenes):
+            return
+        self.scenes[index], self.scenes[target] = self.scenes[target], self.scenes[index]
+        self.refresh_scene_list(prefer=target)
+        self.save_project()
 
     def update_selected_scene(self) -> None:
         self.capture_selected_scene()
-        self.refresh_scene_list()
+        self.refresh_scene_list(prefer=self.selected_scene_index)
         self.save_project()
 
     def delete_selected_scene(self) -> None:
         if self.selected_scene_index is None:
             return
-        del self.scenes[self.selected_scene_index]
+        index = self.selected_scene_index
+        del self.scenes[index]
+        prefer = min(index, len(self.scenes) - 1) if self.scenes else None
         self.selected_scene_index = None
-        self.refresh_scene_list()
+        self.refresh_scene_list(prefer=prefer)
         self.save_project()
 
     def save_scene_prompts(self) -> None:
@@ -1063,24 +1279,35 @@ class Studio(ctk.CTk):
 
     def validate_voice_request(self, indexes: list[int]) -> bool:
         errors = []
-        if not self.current_project_path: errors.append("Create or open a project first.")
-        if not self.project_title.get().strip(): errors.append("Project title is required.")
-        if not self.script_box.get("1.0", "end-1c").strip(): errors.append("Add or import a master script first.")
-        if not self.scenes: errors.append("Split the script into scenes first.")
-        if indexes and not any(clean_text(self.scenes[i].get("narration", "")) for i in indexes): errors.append("The selected scenes contain no narration text.")
-        if errors: messagebox.showerror("Narration validation", "\n".join(errors)); return False
+        if not self.current_project_path:
+            errors.append("Create or open a project first.")
+        if not self.project_title.get().strip():
+            errors.append("Project title is required.")
+        if not self.scenes:
+            errors.append("Add or split scenes first.")
+        has_scene_text = indexes and any(clean_text(self.scenes[i].get("narration", "")) for i in indexes)
+        has_master = bool(self.script_box.get("1.0", "end-1c").strip())
+        if not has_scene_text and not has_master:
+            errors.append("Add narration text to the selected scenes (or a master script).")
+        elif indexes and not has_scene_text:
+            errors.append("The selected scenes contain no narration text.")
+        if errors:
+            messagebox.showerror("Narration validation", "\n".join(errors))
+            return False
         return True
 
     def start_voice_generation(self, indexes: list[int], regenerate: bool = False, preview_text: str = "", combine: bool = False) -> None:
         if self.generating:
             return
-        if not preview_text and not combine and not self.validate_voice_request(indexes): return
+        if not preview_text and not combine and not self.validate_voice_request(indexes):
+            return
         engine = self.voice_engine.get()
         config = dict(self.settings["vibevoice" if engine == "VibeVoice Realtime" else "kokoro"])
         label = self.voice_menu.get()
         options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
         language, voice_id = options[label]
-        language, speed = language or self.voice_language.get(), float(self.speed.get())
+        lang_code = LANGUAGE_CODES.get(self.voice_language.get(), self.voice_language.get())
+        language, speed = language or lang_code, float(self.speed.get())
         self.generating = True
         self.failed_voice_indexes = []
         self.set_voice_busy(True, "Validating", 0)
@@ -1167,6 +1394,8 @@ class Studio(ctk.CTk):
         self.voice_status.configure(text=message)
         self.append_voice_log(message)
         self.save_project()
+        self.refresh_scene_list(prefer=self.selected_scene_index)
+        self.refresh_progress()
 
     def finish_voice_run(self, result, indexes: list[int], autoplay: bool = False) -> None:
         if result.success:
@@ -1259,9 +1488,12 @@ class Studio(ctk.CTk):
         self.capture_selected_scene()
         self.save_project()
 
-        kling_lines = []
-        image_lines = []
-        production_rows = ["scene,title,narration_file,kling_prompt_file,image_prompt_file"]
+        production_rows = ["scene,title,narration_file,duration_seconds,kling_prompt_file,image_prompt_file"]
+        duration_rows = ["scene,title,duration_seconds,source,word_count"]
+        srt_blocks: list[str] = []
+        cursor = 0.0
+        speed = float(self.speed.get())
+        silence = float(self.settings.get("narration", {}).get("silence", 0.25))
 
         for i, scene in enumerate(self.scenes, 1):
             base = f"{i:02d}_{safe_name(scene.get('title','scene'))}"
@@ -1270,17 +1502,45 @@ class Studio(ctk.CTk):
             kling_file.write_text(scene.get("kling_prompt", ""), encoding="utf-8")
             image_file.write_text(scene.get("image_prompt", ""), encoding="utf-8")
             narration_file = scene.get("audioPath", "")
+            measured = float(scene.get("audioDuration") or 0)
+            text = scene.get("narration", "")
+            duration = measured or estimate_seconds(text, speed)
+            source = "audio" if measured else "estimate"
             production_rows.append(
-                f'{i},"{scene.get("title","")}","{narration_file}",'
-                f'"03_kling/{base}.txt","04_images/{base}.txt"'
+                ",".join([
+                    str(i),
+                    csv_cell(scene.get("title", "")),
+                    csv_cell(narration_file),
+                    f"{duration:.2f}",
+                    csv_cell(f"03_kling/{base}.txt"),
+                    csv_cell(f"04_images/{base}.txt"),
+                ])
             )
+            duration_rows.append(
+                ",".join([
+                    str(i),
+                    csv_cell(scene.get("title", "")),
+                    f"{duration:.2f}",
+                    source,
+                    str(len(re.findall(r"\w+", text))),
+                ])
+            )
+            if clean_text(text):
+                start, end = cursor, cursor + max(0.4, duration)
+                srt_blocks.append(
+                    f"{len(srt_blocks) + 1}\n{format_srt_time(start)} --> {format_srt_time(end)}\n{text.strip()}\n"
+                )
+                cursor = end + silence
 
-        (self.current_project_path / "06_davinci" / "production_sheet.csv").write_text(
-            "\n".join(production_rows), encoding="utf-8"
-        )
+        davinci = self.current_project_path / "06_davinci"
+        davinci.mkdir(parents=True, exist_ok=True)
+        (davinci / "production_sheet.csv").write_text("\n".join(production_rows), encoding="utf-8")
+        (davinci / "duration_report.csv").write_text("\n".join(duration_rows), encoding="utf-8")
+        (davinci / "subtitles.srt").write_text("\n".join(srt_blocks).strip() + ("\n" if srt_blocks else ""), encoding="utf-8")
         self.export_status.configure(
-            text="Production pack exported into the project folders."
+            text="Exported production_sheet.csv, duration_report.csv and subtitles.srt into 06_davinci."
         )
+        self.refresh_progress()
 
     def open_voice_folder(self) -> None:
         if not self.current_project_path:

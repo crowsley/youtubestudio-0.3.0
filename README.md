@@ -2,13 +2,13 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.0 - New community name
+## Version 0.7.1 - Workflow polish
 
 - Project, script and scene management
 - Local Kokoro narration generation
 - Optional VibeVoice Realtime 0.5B narration through a local OpenAI-compatible server
 - Kling and ComfyUI prompt storage
-- DaVinci Resolve production-pack export
+- DaVinci Resolve production-pack export (CSV sheet, duration report, SRT)
 - Standalone Windows application and Inno Setup installer
 - Start Menu, optional desktop shortcut and uninstaller
 - Projects stored safely in `%LOCALAPPDATA%\AtoZ Voice Studio`

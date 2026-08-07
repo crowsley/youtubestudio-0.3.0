@@ -21,8 +21,21 @@ if not DATA_DIR.exists() and LEGACY_DATA_DIR.exists():
         pass
 
 
+def find_kokoro_dir() -> Path:
+    candidates = [
+        Path.home() / "Downloads" / "Kokoro-TTS",
+        Path.home() / "Kokoro-TTS",
+        DATA_DIR / "Kokoro-TTS",
+    ]
+    for path in candidates:
+        if (path / "venv" / "Scripts" / "python.exe").is_file() or path.is_dir():
+            return path
+    return candidates[0]
+
+
 def default_settings() -> dict:
-    kokoro_dir = Path.home() / "Downloads" / "Kokoro-TTS"
+    kokoro_dir = find_kokoro_dir()
+    python = kokoro_dir / "venv" / "Scripts" / "python.exe"
     return {
         "schema_version": SCHEMA_VERSION,
         "general": {
@@ -36,8 +49,8 @@ def default_settings() -> dict:
             "check_updates_on_startup": False,
         },
         "kokoro": {
-            "install_dir": str(kokoro_dir),
-            "python": str(kokoro_dir / "venv" / "Scripts" / "python.exe"),
+            "install_dir": str(kokoro_dir) if kokoro_dir.is_dir() else "",
+            "python": str(python) if python.is_file() else "",
             "model_repo": "hexgrad/Kokoro-82M",
             "language": "b",
             "voice": "bf_emma",

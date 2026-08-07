@@ -103,7 +103,8 @@ def detect_python(kokoro_dir: str = "") -> str:
     candidates = []
     if kokoro_dir:
         candidates.append(Path(kokoro_dir) / "venv" / "Scripts" / "python.exe")
-    candidates.append(Path.home() / "Downloads" / "Kokoro-TTS" / "venv" / "Scripts" / "python.exe")
+    for root in (Path.home() / "Downloads" / "Kokoro-TTS", Path.home() / "Kokoro-TTS"):
+        candidates.append(root / "venv" / "Scripts" / "python.exe")
     found = shutil.which("python")
     if found:
         candidates.append(Path(found))
