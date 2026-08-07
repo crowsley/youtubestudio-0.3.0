@@ -6,8 +6,8 @@ This project publishes `AtoZ-Voice-Studio-Setup.exe` when a version tag is pushe
 2. Ensure the version in `version.json` and `installer.iss` matches the tag.
 3. Push the release tag:
 
-       git tag v0.7.4
-       git push origin v0.7.4
+       git tag v0.7.5
+       git push origin v0.7.5
 
 GitHub Actions builds the standalone app, creates the installer and attaches it to the release.
 

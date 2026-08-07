@@ -39,6 +39,7 @@ BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False
 USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", BASE_DIR)) / APP_NAME
 PROJECTS_DIR = USER_DATA_DIR / "projects"
 OUTPUT_DIR = USER_DATA_DIR / "output"
+CLONE_SAMPLES_DIR = Path.home() / "Documents" / "AtoZ Voice Studio" / "Clone Samples"
 VERSION_FILE = BASE_DIR / "version.json"
 
 # Grades from Kokoro VOICES.md — best English first for audiobook narration.
@@ -139,6 +140,8 @@ class Studio(ctk.CTk):
 
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        CLONE_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+        self.migrate_legacy_clone_samples()
 
         self.settings_store = SettingsStore()
         self.settings = self.settings_store.load()
@@ -165,6 +168,20 @@ class Studio(ctk.CTk):
             self.after(500, lambda: self.load_project_path(Path(last_project), quiet=True))
         if not self.settings_store.path.exists():
             self.after(300, self.show_setup_wizard)
+
+    def migrate_legacy_clone_samples(self) -> None:
+        """Copy older LocalAppData voice_samples into Documents so Browse finds them."""
+        legacy = USER_DATA_DIR / "voice_samples"
+        if not legacy.is_dir():
+            return
+        target = self.clone_samples_dir()
+        for path in legacy.glob("*.wav"):
+            dest = target / path.name
+            if not dest.exists():
+                try:
+                    shutil.copy2(path, dest)
+                except OSError:
+                    pass
 
     def load_version(self) -> str:
         try:
@@ -452,6 +469,7 @@ class Studio(ctk.CTk):
         self.record_button.pack(side="left", padx=4, pady=8)
         ctk.CTkButton(sample_bar, text="Play sample", command=self.play_clone_sample, width=110).pack(side="left", padx=4, pady=8)
         ctk.CTkButton(sample_bar, text="Browse WAV", command=self.browse_clone_sample, width=110).pack(side="left", padx=4, pady=8)
+        ctk.CTkButton(sample_bar, text="Samples folder", command=self.open_clone_samples_folder, width=120).pack(side="left", padx=4, pady=8)
         ctk.CTkButton(sample_bar, text="Use for clone", command=self.use_clone_sample_now, width=120).pack(side="left", padx=4, pady=8)
         self.clone_sample_label = ctk.CTkLabel(sample_bar, text="No sample yet — record 10–20s of clear speech")
         self.clone_sample_label.pack(side="left", padx=10)
@@ -543,20 +561,26 @@ class Studio(ctk.CTk):
             )
         self.voice_guide.configure(text=text)
 
+    def clone_samples_dir(self) -> Path:
+        CLONE_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+        return CLONE_SAMPLES_DIR
+
     def clone_sample_path(self) -> Path:
         configured = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
         if configured.is_file():
             return configured
-        return USER_DATA_DIR / "voice_samples" / "clone-reference.wav"
+        return self.clone_samples_dir() / "clone-reference.wav"
 
     def refresh_clone_sample_label(self) -> None:
         if not hasattr(self, "clone_sample_label"):
             return
         path = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
         if path.is_file():
-            self.clone_sample_label.configure(text=f"Sample: {path.name}")
+            self.clone_sample_label.configure(text=f"Sample: {path.name}  ({path.parent})")
         else:
-            self.clone_sample_label.configure(text="No sample yet — record 10–20s of clear speech")
+            self.clone_sample_label.configure(
+                text=f"No sample yet — saved to Documents\\AtoZ Voice Studio\\Clone Samples"
+            )
 
     def toggle_mic_recording(self) -> None:
         if self.mic_recorder.recording:
@@ -579,7 +603,7 @@ class Studio(ctk.CTk):
         self.append_voice_log("Microphone recording started")
 
     def stop_mic_recording(self) -> None:
-        output = USER_DATA_DIR / "voice_samples" / f"clone-reference-{datetime.now().strftime('%Y%m%d-%H%M%S')}.wav"
+        output = self.clone_samples_dir() / f"clone-reference-{datetime.now().strftime('%Y%m%d-%H%M%S')}.wav"
         try:
             info = self.mic_recorder.stop(output)
         except Exception as exc:
@@ -595,10 +619,10 @@ class Studio(ctk.CTk):
             entry.insert(0, str(output))
         self.record_button.configure(text="Record mic", fg_color=["#3B8ED0", "#1F6AA5"])
         self.refresh_clone_sample_label()
-        self.append_voice_log(f"Saved clone sample {output.name} ({info['duration']:.1f}s)")
-        self.status.configure(text=f"Saved clone sample ({info['duration']:.1f}s)")
+        self.append_voice_log(f"Saved clone sample {output}")
+        self.status.configure(text=f"Saved to Documents\\AtoZ Voice Studio\\Clone Samples ({info['duration']:.1f}s)")
         try:
-            self.load_audio(output, autoplay=True)
+            self.load_audio(output, autoplay=True, quiet=True)
         except Exception:
             pass
 
@@ -612,6 +636,7 @@ class Studio(ctk.CTk):
     def browse_clone_sample(self) -> None:
         selected = filedialog.askopenfilename(
             title="Choose clone reference WAV",
+            initialdir=str(self.clone_samples_dir()),
             filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")],
         )
         if not selected:
@@ -630,6 +655,10 @@ class Studio(ctk.CTk):
             entry.insert(0, str(path))
         self.refresh_clone_sample_label()
         self.status.configure(text=f"Clone sample set: {path.name}")
+
+    def open_clone_samples_folder(self) -> None:
+        folder = self.clone_samples_dir()
+        os.startfile(folder)
 
     def use_clone_sample_now(self) -> None:
         path = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
@@ -758,14 +787,17 @@ class Studio(ctk.CTk):
         self._setting_entry(vibevoice, 4, "Request timeout", "vibevoice.timeout")
         self._button_row(vibevoice, 5, [("Open server", lambda: webbrowser.open(self._entry_value("vibevoice.base_url")))])
 
-        clone = self._settings_section(page, "Clone (OpenAI-compatible)", 3, "1) Record or browse a WAV on the Voice tab  2) Set Base URL to a clone TTS server  3) Generate with Clone engine")
+        clone = self._settings_section(page, "Clone (OpenAI-compatible)", 3, "Samples live in Documents\\AtoZ Voice Studio\\Clone Samples — record on Voice tab, then set Base URL to a clone TTS server")
         self._setting_entry(clone, 1, "Base URL", "clone.base_url")
         self._setting_entry(clone, 2, "Model", "clone.model")
         self._setting_entry(clone, 3, "Default voice id", "clone.voice")
         self._setting_entry(clone, 4, "Reference WAV sample", "clone.reference_wav", browse="file")
         self._setting_entry(clone, 5, "API key (optional)", "secret.clone_api_key", secret=True)
         self._setting_entry(clone, 6, "Request timeout", "clone.timeout")
-        self._button_row(clone, 7, [("Open Voice tab to record", lambda: self.goto_tab("Voice"))])
+        self._button_row(clone, 7, [
+            ("Open samples folder", self.open_clone_samples_folder),
+            ("Open Voice tab to record", lambda: self.goto_tab("Voice")),
+        ])
 
         ollama = self._settings_section(page, "Ollama (AI prompts)", 4, "Local LLM for Kling/image prompt assist from scene narration")
         self._setting_entry(ollama, 1, "Base URL", "ollama.base_url")

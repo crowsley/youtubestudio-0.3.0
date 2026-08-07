@@ -2,14 +2,15 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.4 - Recover old narration paths
+## Version 0.7.5 - Clone samples in Documents
 
+- Clone mic recordings saved to `Documents\AtoZ Voice Studio\Clone Samples`
+- Browse WAV opens that folder; Samples folder button included
 - Relink scene/full narration after YouTube AI Studio → AtoZ rename
 - Validate existing WAVs on open; quieter playback when a file is missing
 - Full narration warns if scenes are not complete yet
 - Record microphone samples for voice cloning on the Voice tab
 - Quick-guide steps that change with Kokoro / VibeVoice / Clone
-- Browse WAV, play sample, and one-click Use for clone
 - Full English Kokoro voice catalogue with quality grades
 - Optional Clone engine via OpenAI-compatible `/v1/audio/speech` + reference WAV
 - Ollama AI assist for Kling and image prompts
@@ -20,19 +21,8 @@ Local Windows production workspace for faceless and AI-assisted YouTube videos.
 - Kling and ComfyUI prompt storage
 - DaVinci Resolve production-pack export (CSV sheet, duration report, SRT)
 - Standalone Windows application and Inno Setup installer
-- Start Menu, optional desktop shortcut and uninstaller
-- Projects stored safely in `%LOCALAPPDATA%\AtoZ Voice Studio`
 - Installer-based updates from GitHub Releases
-- Persistent Settings and first-launch setup report
-- Real Kokoro WAV, ComfyUI image and FFmpeg MP4 connection tests
-- Manual/API Kling configuration with secure credential storage
-- Diagnostics with secret redaction and visible failure reasons
-- Cancellable Kokoro subprocess generation with live structured progress
-- Preview, individual scene, sequential all-scenes and combined narration WAVs
-- Validated atomic audio output and resume/retry state in project files
 - Built-in Windows playback with play, pause, stop, replay, seek and volume
-- Optimized batch narration loads Kokoro once for all queued scenes
-- Published Kokoro voice-quality grades in the voice picker
 - Consistent -19 dBFS narration mastering when scene WAVs are combined
 
 ## VibeVoice Realtime
