@@ -163,6 +163,69 @@ class KokoroNarrationProvider:
         with self.log_file.open("a", encoding="utf-8") as log: log.write(record)
 
 
+class MicRecorder:
+    """Record mono WAV from the default Windows microphone."""
+
+    def __init__(self, sample_rate: int = 24000):
+        self.sample_rate = sample_rate
+        self._stream = None
+        self._chunks: list = []
+        self.recording = False
+
+    def start(self) -> None:
+        if self.recording:
+            return
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise RuntimeError("Microphone recording needs the sounddevice package.") from exc
+        self._chunks = []
+        self.recording = True
+
+        def callback(indata, frames, time_info, status) -> None:  # noqa: ARG001
+            if self.recording:
+                self._chunks.append(indata.copy())
+
+        self._stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            channels=1,
+            dtype="float32",
+            callback=callback,
+        )
+        self._stream.start()
+
+    def stop(self, output: Path) -> dict:
+        import numpy as np
+        import soundfile as sf
+
+        self.recording = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+        if not self._chunks:
+            raise ValueError("No microphone audio was captured. Check Windows mic permissions.")
+        audio = np.concatenate(self._chunks, axis=0)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(output.stem + ".tmp.wav")
+        sf.write(str(temporary), audio, self.sample_rate)
+        info = validate_wav(temporary)
+        os.replace(temporary, output)
+        self._chunks = []
+        return info
+
+    def cancel(self) -> None:
+        self.recording = False
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        self._chunks = []
+
+
 class OpenAICompatibleNarrationProvider:
     """OpenAI /v1/audio/speech client used by VibeVoice and optional clone servers."""
 

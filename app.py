@@ -27,7 +27,7 @@ if sys.stdout is None:
 
 import customtkinter as ctk
 from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
-from narration import CloneNarrationProvider, KokoroNarrationProvider, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
+from narration import CloneNarrationProvider, KokoroNarrationProvider, MicRecorder, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 import urllib.error
 import urllib.request
@@ -153,6 +153,7 @@ class Studio(ctk.CTk):
         self.voice_provider = None
         self.failed_voice_indexes: list[int] = []
         self.audio_player = WindowsAudioPlayer()
+        self.mic_recorder = MicRecorder()
         self.project_narration: dict = {}
 
         self.build_ui()
@@ -396,10 +397,24 @@ class Studio(ctk.CTk):
     def create_voice_tab(self) -> None:
         tab = self.tabs.add("Voice")
         tab.grid_columnconfigure(0, weight=1)
-        tab.grid_rowconfigure(5, weight=1)
+        tab.grid_rowconfigure(7, weight=1)
+
+        guide = ctk.CTkFrame(tab)
+        guide.grid(row=0, column=0, padx=10, pady=(10, 4), sticky="ew")
+        ctk.CTkLabel(guide, text="Quick guide", font=ctk.CTkFont(size=16, weight="bold")).pack(
+            anchor="w", padx=12, pady=(10, 2)
+        )
+        self.voice_guide = ctk.CTkLabel(
+            guide,
+            text="",
+            justify="left",
+            wraplength=980,
+            text_color=("gray30", "gray75"),
+        )
+        self.voice_guide.pack(anchor="w", padx=12, pady=(0, 10))
 
         settings = ctk.CTkFrame(tab)
-        settings.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        settings.grid(row=1, column=0, padx=10, pady=6, sticky="ew")
 
         self.voice_badge = ctk.CTkLabel(settings, text="Not generated", corner_radius=8, fg_color=("gray75", "gray30"), width=120)
         self.voice_badge.grid(row=0, column=0, padx=12, pady=12)
@@ -428,8 +443,21 @@ class Studio(ctk.CTk):
         self.speed_readout = ctk.CTkLabel(settings, textvariable=self.speed, width=60)
         self.speed_readout.grid(row=0, column=9, padx=4)
 
+        sample_bar = ctk.CTkFrame(tab)
+        sample_bar.grid(row=2, column=0, padx=10, pady=(2, 4), sticky="ew")
+        ctk.CTkLabel(sample_bar, text="Clone sample", font=ctk.CTkFont(weight="bold")).pack(
+            side="left", padx=(10, 8), pady=8
+        )
+        self.record_button = ctk.CTkButton(sample_bar, text="Record mic", command=self.toggle_mic_recording, width=110)
+        self.record_button.pack(side="left", padx=4, pady=8)
+        ctk.CTkButton(sample_bar, text="Play sample", command=self.play_clone_sample, width=110).pack(side="left", padx=4, pady=8)
+        ctk.CTkButton(sample_bar, text="Browse WAV", command=self.browse_clone_sample, width=110).pack(side="left", padx=4, pady=8)
+        ctk.CTkButton(sample_bar, text="Use for clone", command=self.use_clone_sample_now, width=120).pack(side="left", padx=4, pady=8)
+        self.clone_sample_label = ctk.CTkLabel(sample_bar, text="No sample yet — record 10–20s of clear speech")
+        self.clone_sample_label.pack(side="left", padx=10)
+
         generate_bar = ctk.CTkFrame(tab)
-        generate_bar.grid(row=1, column=0, padx=10, pady=(4, 2), sticky="ew")
+        generate_bar.grid(row=3, column=0, padx=10, pady=(4, 2), sticky="ew")
         self.voice_action_buttons = []
         for label, command in [
             ("Preview text", self.preview_selected_text),
@@ -444,7 +472,7 @@ class Studio(ctk.CTk):
             self.voice_action_buttons.append(button)
 
         utility_bar = ctk.CTkFrame(tab)
-        utility_bar.grid(row=2, column=0, padx=10, pady=(2, 6), sticky="ew")
+        utility_bar.grid(row=4, column=0, padx=10, pady=(2, 6), sticky="ew")
         for label, command in [
             ("Open folder", self.open_voice_folder),
             ("Open log", self.open_voice_log),
@@ -458,14 +486,14 @@ class Studio(ctk.CTk):
         self.voice_status = ctk.CTkLabel(
             tab, text="Create or open a project before generating narration."
         )
-        self.voice_status.grid(row=3, column=0, padx=14, pady=(6, 2), sticky="w")
+        self.voice_status.grid(row=5, column=0, padx=14, pady=(6, 2), sticky="w")
         self.voice_progress = ctk.CTkProgressBar(tab)
         self.voice_progress.set(0)
-        self.voice_progress.grid(row=4, column=0, padx=14, pady=6, sticky="ew")
-        self.voice_log = ctk.CTkTextbox(tab, height=150, wrap="word")
-        self.voice_log.grid(row=5, column=0, padx=14, pady=6, sticky="nsew")
+        self.voice_progress.grid(row=6, column=0, padx=14, pady=6, sticky="ew")
+        self.voice_log = ctk.CTkTextbox(tab, height=140, wrap="word")
+        self.voice_log.grid(row=7, column=0, padx=14, pady=6, sticky="nsew")
         player = ctk.CTkFrame(tab)
-        player.grid(row=6, column=0, padx=10, pady=(4, 10), sticky="ew")
+        player.grid(row=8, column=0, padx=10, pady=(4, 10), sticky="ew")
         for label, command in [("Play", self.play_audio), ("Pause", self.pause_audio), ("Stop", self.stop_audio), ("Replay", self.replay_audio), ("Delete scene audio", self.delete_selected_audio)]:
             ctk.CTkButton(player, text=label, command=command, width=105).pack(side="left", padx=4, pady=8)
         self.audio_seek = ctk.CTkSlider(player, from_=0, to=1, command=self.seek_audio, width=170)
@@ -475,6 +503,8 @@ class Studio(ctk.CTk):
         self.audio_volume.pack(side="left", padx=8)
         self.audio_details = ctk.CTkLabel(player, text="No audio loaded")
         self.audio_details.pack(side="left", padx=8)
+        self.refresh_clone_sample_label()
+        self.refresh_voice_guide()
 
     def change_voice_engine(self, engine: str) -> None:
         if engine == "VibeVoice Realtime":
@@ -486,6 +516,138 @@ class Studio(ctk.CTk):
         self.voice_menu.configure(values=list(options))
         self.voice_menu.set(next(iter(options)))
         self.voice_language.configure(state="disabled" if engine != "Kokoro" else "normal")
+        self.refresh_voice_guide()
+
+    def refresh_voice_guide(self) -> None:
+        if not hasattr(self, "voice_guide"):
+            return
+        engine = self.voice_engine.get() if hasattr(self, "voice_engine") else "Kokoro"
+        if engine == "Clone (OpenAI API)":
+            text = (
+                "1. Click Record mic and speak clearly for 10–20 seconds (or Browse WAV).\n"
+                "2. Click Use for clone (engine + reference sample are set).\n"
+                "3. In Settings → Clone, set your clone server Base URL, then Generate scene.\n"
+                "Note: cloning needs a separate OpenAI-compatible TTS/clone server — recording alone is not enough."
+            )
+        elif engine == "VibeVoice Realtime":
+            text = (
+                "1. Start your VibeVoice server (run_vibevoice_realtime.bat).\n"
+                "2. Pick a voice → Preview text or Generate scene.\n"
+                "3. Export production pack, then import WAVs + subtitles.srt in DaVinci Resolve."
+            )
+        else:
+            text = (
+                "Easiest path (audiobooks / shorts): 1) Pick a Kokoro voice (Heart/Bella/Emma are strongest) → "
+                "2) Generate scene or Generate all → 3) Full narration → 4) Export → open DaVinci folder.\n"
+                "To clone your own voice, switch Engine to Clone (OpenAI API) and follow the steps shown there."
+            )
+        self.voice_guide.configure(text=text)
+
+    def clone_sample_path(self) -> Path:
+        configured = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
+        if configured.is_file():
+            return configured
+        return USER_DATA_DIR / "voice_samples" / "clone-reference.wav"
+
+    def refresh_clone_sample_label(self) -> None:
+        if not hasattr(self, "clone_sample_label"):
+            return
+        path = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
+        if path.is_file():
+            self.clone_sample_label.configure(text=f"Sample: {path.name}")
+        else:
+            self.clone_sample_label.configure(text="No sample yet — record 10–20s of clear speech")
+
+    def toggle_mic_recording(self) -> None:
+        if self.mic_recorder.recording:
+            self.stop_mic_recording()
+        else:
+            self.start_mic_recording()
+
+    def start_mic_recording(self) -> None:
+        if self.generating:
+            messagebox.showwarning(APP_NAME, "Wait for narration to finish before recording.")
+            return
+        try:
+            self.mic_recorder.start()
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Could not start microphone: {exc}")
+            return
+        self.record_button.configure(text="Stop recording", fg_color="#b42318")
+        self.clone_sample_label.configure(text="Recording… speak clearly, then Stop")
+        self.status.configure(text="Recording microphone sample")
+        self.append_voice_log("Microphone recording started")
+
+    def stop_mic_recording(self) -> None:
+        output = USER_DATA_DIR / "voice_samples" / f"clone-reference-{datetime.now().strftime('%Y%m%d-%H%M%S')}.wav"
+        try:
+            info = self.mic_recorder.stop(output)
+        except Exception as exc:
+            self.mic_recorder.cancel()
+            self.record_button.configure(text="Record mic", fg_color=["#3B8ED0", "#1F6AA5"])
+            messagebox.showerror(APP_NAME, str(exc))
+            return
+        self.settings.setdefault("clone", {})["reference_wav"] = str(output)
+        self.settings_store.save(self.settings)
+        if "clone.reference_wav" in self.setting_entries:
+            entry = self.setting_entries["clone.reference_wav"]
+            entry.delete(0, "end")
+            entry.insert(0, str(output))
+        self.record_button.configure(text="Record mic", fg_color=["#3B8ED0", "#1F6AA5"])
+        self.refresh_clone_sample_label()
+        self.append_voice_log(f"Saved clone sample {output.name} ({info['duration']:.1f}s)")
+        self.status.configure(text=f"Saved clone sample ({info['duration']:.1f}s)")
+        try:
+            self.load_audio(output, autoplay=True)
+        except Exception:
+            pass
+
+    def play_clone_sample(self) -> None:
+        path = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
+        if not path.is_file():
+            messagebox.showwarning(APP_NAME, "Record or browse a sample first.")
+            return
+        self.load_audio(path, autoplay=True)
+
+    def browse_clone_sample(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="Choose clone reference WAV",
+            filetypes=[("WAV audio", "*.wav"), ("All files", "*.*")],
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        try:
+            validate_wav(path)
+        except ValueError as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+            return
+        self.settings.setdefault("clone", {})["reference_wav"] = str(path)
+        self.settings_store.save(self.settings)
+        if "clone.reference_wav" in self.setting_entries:
+            entry = self.setting_entries["clone.reference_wav"]
+            entry.delete(0, "end")
+            entry.insert(0, str(path))
+        self.refresh_clone_sample_label()
+        self.status.configure(text=f"Clone sample set: {path.name}")
+
+    def use_clone_sample_now(self) -> None:
+        path = Path(str(self.settings.get("clone", {}).get("reference_wav", "") or ""))
+        if not path.is_file():
+            messagebox.showwarning(APP_NAME, "Record or browse a WAV sample first.")
+            return
+        self.voice_engine.set("Clone (OpenAI API)")
+        self.change_voice_engine("Clone (OpenAI API)")
+        if "Reference sample (clone)" in CLONE_OPTIONS:
+            self.voice_menu.set("Reference sample (clone)")
+        self.status.configure(text="Clone engine ready — set server URL in Settings if needed, then Generate")
+        messagebox.showinfo(
+            APP_NAME,
+            "Clone sample is ready.\n\n"
+            "Next: Settings → Clone → set Base URL to your clone TTS server.\n"
+            "Then Generate scene.\n\n"
+            "Recording alone does not clone — the server does the voice cloning.",
+        )
 
     def create_prompts_tab(self) -> None:
         tab = self.tabs.add("Kling & Images")
@@ -596,13 +758,14 @@ class Studio(ctk.CTk):
         self._setting_entry(vibevoice, 4, "Request timeout", "vibevoice.timeout")
         self._button_row(vibevoice, 5, [("Open server", lambda: webbrowser.open(self._entry_value("vibevoice.base_url")))])
 
-        clone = self._settings_section(page, "Clone (OpenAI-compatible)", 3, "Point at a local/cloud /v1/audio/speech server that supports voice cloning; use a clean 10–30s WAV sample you own")
+        clone = self._settings_section(page, "Clone (OpenAI-compatible)", 3, "1) Record or browse a WAV on the Voice tab  2) Set Base URL to a clone TTS server  3) Generate with Clone engine")
         self._setting_entry(clone, 1, "Base URL", "clone.base_url")
         self._setting_entry(clone, 2, "Model", "clone.model")
         self._setting_entry(clone, 3, "Default voice id", "clone.voice")
         self._setting_entry(clone, 4, "Reference WAV sample", "clone.reference_wav", browse="file")
         self._setting_entry(clone, 5, "API key (optional)", "secret.clone_api_key", secret=True)
         self._setting_entry(clone, 6, "Request timeout", "clone.timeout")
+        self._button_row(clone, 7, [("Open Voice tab to record", lambda: self.goto_tab("Voice"))])
 
         ollama = self._settings_section(page, "Ollama (AI prompts)", 4, "Local LLM for Kling/image prompt assist from scene narration")
         self._setting_entry(ollama, 1, "Base URL", "ollama.base_url")

@@ -5,7 +5,7 @@ if exist "venv\Scripts\activate.bat" call "venv\Scripts\activate.bat"
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist installer-output rmdir /s /q installer-output
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name AtoZVoiceStudio --add-data "narration_adapter.py;." --collect-all customtkinter --collect-all kokoro --collect-all misaki --collect-all phonemizer --collect-all espeakng_loader --collect-all segments --collect-all csvw --collect-all language_tags --collect-all keyring --collect-all spacy --collect-all soundfile app.py
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name AtoZVoiceStudio --add-data "narration_adapter.py;." --collect-all customtkinter --collect-all kokoro --collect-all misaki --collect-all phonemizer --collect-all espeakng_loader --collect-all segments --collect-all csvw --collect-all language_tags --collect-all keyring --collect-all spacy --collect-all soundfile --collect-all sounddevice app.py
 if errorlevel 1 goto :failed
 rem The bundled Codex Python can run tkinter but PyInstaller cannot discover its Tcl/Tk files.
 for /f "delims=" %%I in ('python -c "import sys; print(sys.base_prefix)"') do set "PYBASE=%%I"

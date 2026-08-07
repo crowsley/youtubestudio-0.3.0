@@ -2,8 +2,11 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.2 - Audiobook & shorts workflow
+## Version 0.7.3 - Mic sample + guided voice tab
 
+- Record microphone samples for voice cloning on the Voice tab
+- Quick-guide steps that change with Kokoro / VibeVoice / Clone
+- Browse WAV, play sample, and one-click Use for clone
 - Full English Kokoro voice catalogue with quality grades
 - Optional Clone engine via OpenAI-compatible `/v1/audio/speech` + reference WAV
 - Ollama AI assist for Kling and image prompts
