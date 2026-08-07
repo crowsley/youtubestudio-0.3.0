@@ -2,28 +2,19 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.5 - Clone samples in Documents
+## Version 0.8.0 - Per-scene voices & story SFX
 
+- Per-scene Kokoro voice / character presets (male, female, British, etc.)
+- Import story SFX (mp3/wav/…) → convert to studio WAV via FFmpeg
+- Attach SFX to scenes; library in `Documents\AtoZ Voice Studio\Sound Effects`
+- Full narration can mix timed SFX under voice when FFmpeg is configured
+- Export copies voice + SFX into project folders for DaVinci
 - Clone mic recordings saved to `Documents\AtoZ Voice Studio\Clone Samples`
-- Browse WAV opens that folder; Samples folder button included
-- Relink scene/full narration after YouTube AI Studio → AtoZ rename
-- Validate existing WAVs on open; quieter playback when a file is missing
-- Full narration warns if scenes are not complete yet
-- Record microphone samples for voice cloning on the Voice tab
-- Quick-guide steps that change with Kokoro / VibeVoice / Clone
-- Full English Kokoro voice catalogue with quality grades
-- Optional Clone engine via OpenAI-compatible `/v1/audio/speech` + reference WAV
+- Relink narration after YouTube AI Studio → AtoZ rename
 - Ollama AI assist for Kling and image prompts
-- Export validation, WAV copies for DaVinci, and import README
-- Project, script and scene management
-- Local Kokoro narration generation
-- Optional VibeVoice Realtime 0.5B narration through a local OpenAI-compatible server
-- Kling and ComfyUI prompt storage
-- DaVinci Resolve production-pack export (CSV sheet, duration report, SRT)
-- Standalone Windows application and Inno Setup installer
+- DaVinci Resolve production-pack export (CSV, duration report, SRT)
+- Local Kokoro / VibeVoice / Clone narration engines
 - Installer-based updates from GitHub Releases
-- Built-in Windows playback with play, pause, stop, replay, seek and volume
-- Consistent -19 dBFS narration mastering when scene WAVs are combined
 
 ## VibeVoice Realtime
 

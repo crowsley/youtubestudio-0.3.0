@@ -26,12 +26,13 @@ if sys.stdout is None:
     sys.stdout = open(os.devnull, "w", encoding="utf-8")
 
 import customtkinter as ctk
-from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
+from connections import CredentialStore, convert_to_studio_wav, detect_ffmpeg, detect_python, mix_narration_with_sfx, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
 from narration import CloneNarrationProvider, KokoroNarrationProvider, MicRecorder, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
 import urllib.error
 import urllib.request
 import shutil
+from collections import defaultdict
 
 APP_NAME = "AtoZ Voice Studio"
 PROJECT_URL = "https://github.com/crowsley/atoz-voice-studio"
@@ -40,6 +41,7 @@ USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", BASE_DIR)) / APP_NAME
 PROJECTS_DIR = USER_DATA_DIR / "projects"
 OUTPUT_DIR = USER_DATA_DIR / "output"
 CLONE_SAMPLES_DIR = Path.home() / "Documents" / "AtoZ Voice Studio" / "Clone Samples"
+SFX_DIR = Path.home() / "Documents" / "AtoZ Voice Studio" / "Sound Effects"
 VERSION_FILE = BASE_DIR / "version.json"
 
 # Grades from Kokoro VOICES.md — best English first for audiobook narration.
@@ -86,6 +88,17 @@ CLONE_OPTIONS = {
 LANGUAGE_CODES = {"American English": "a", "British English": "b"}
 LANGUAGE_LABELS = {code: label for label, code in LANGUAGE_CODES.items()}
 ENGINE_OPTIONS = ["Kokoro", "VibeVoice Realtime", "Clone (OpenAI API)"]
+SCENE_VOICE_DEFAULT = "(Project default)"
+CHARACTER_VOICE_PRESETS = {
+    SCENE_VOICE_DEFAULT: "",
+    "Female narrator (Heart)": "American Female - Heart (A)",
+    "Female soft (Bella)": "American Female - Bella (A-)",
+    "Male narrator (Michael)": "American Male - Michael (C+)",
+    "Male deep (Fenrir)": "American Male - Fenrir (C+)",
+    "British female (Emma)": "British Female - Emma (B-)",
+    "British male (George)": "British Male - George (C)",
+}
+SCENE_VOICE_CHOICES = [SCENE_VOICE_DEFAULT] + list(VOICE_OPTIONS.keys())
 
 PROJECT_FOLDERS = [
     "01_script",
@@ -93,6 +106,7 @@ PROJECT_FOLDERS = [
     "03_kling",
     "04_images",
     "05_music",
+    "05_sfx",
     "06_davinci",
     "07_thumbnail",
     "08_export",
@@ -141,6 +155,7 @@ class Studio(ctk.CTk):
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         CLONE_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+        SFX_DIR.mkdir(parents=True, exist_ok=True)
         self.migrate_legacy_clone_samples()
 
         self.settings_store = SettingsStore()
@@ -339,7 +354,7 @@ class Studio(ctk.CTk):
         tab.grid_columnconfigure(1, weight=1)
         tab.grid_rowconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(tab, width=260)
+        left = ctk.CTkFrame(tab, width=280)
         left.grid(row=0, column=0, padx=(8, 6), pady=8, sticky="ns")
         left.grid_propagate(False)
 
@@ -359,26 +374,49 @@ class Studio(ctk.CTk):
         right = ctk.CTkFrame(tab)
         right.grid(row=0, column=1, padx=(6, 8), pady=8, sticky="nsew")
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(3, weight=2)
-        right.grid_rowconfigure(5, weight=1)
+        right.grid_rowconfigure(5, weight=2)
         right.grid_rowconfigure(7, weight=1)
 
         ctk.CTkLabel(right, text="Scene title").grid(
             row=0, column=0, padx=14, pady=(14, 4), sticky="w"
         )
         self.scene_title = ctk.CTkEntry(right)
-        self.scene_title.grid(row=1, column=0, padx=14, pady=(0, 8), sticky="ew")
+        self.scene_title.grid(row=1, column=0, padx=14, pady=(0, 6), sticky="ew")
+
+        meta = ctk.CTkFrame(right, fg_color="transparent")
+        meta.grid(row=2, column=0, padx=10, pady=(0, 6), sticky="ew")
+        meta.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(meta, text="Scene voice").grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        self.scene_voice = ctk.CTkOptionMenu(meta, values=SCENE_VOICE_CHOICES, width=320)
+        self.scene_voice.set(SCENE_VOICE_DEFAULT)
+        self.scene_voice.grid(row=0, column=1, padx=4, pady=4, sticky="w")
+        ctk.CTkLabel(meta, text="Quick character").grid(row=1, column=0, padx=4, pady=4, sticky="w")
+        self.scene_character = ctk.CTkOptionMenu(
+            meta, values=list(CHARACTER_VOICE_PRESETS), command=self.apply_character_preset, width=320
+        )
+        self.scene_character.set(SCENE_VOICE_DEFAULT)
+        self.scene_character.grid(row=1, column=1, padx=4, pady=4, sticky="w")
+
+        sfx_row = ctk.CTkFrame(right, fg_color="transparent")
+        sfx_row.grid(row=3, column=0, padx=10, pady=(0, 6), sticky="ew")
+        ctk.CTkLabel(sfx_row, text="Scene SFX").pack(side="left", padx=(4, 8))
+        self.scene_sfx_label = ctk.CTkLabel(sfx_row, text="None")
+        self.scene_sfx_label.pack(side="left", padx=4)
+        ctk.CTkButton(sfx_row, text="Attach SFX", width=100, command=self.attach_scene_sfx).pack(side="left", padx=4)
+        ctk.CTkButton(sfx_row, text="Clear", width=70, command=self.clear_scene_sfx).pack(side="left", padx=2)
+        ctk.CTkButton(sfx_row, text="Import audio", width=110, command=self.import_sfx_to_library).pack(side="left", padx=4)
+        ctk.CTkButton(sfx_row, text="SFX folder", width=90, command=self.open_sfx_folder).pack(side="left", padx=2)
 
         ctk.CTkLabel(right, text="Narration").grid(
-            row=2, column=0, padx=14, pady=(4, 4), sticky="w"
+            row=4, column=0, padx=14, pady=(4, 4), sticky="w"
         )
-        self.scene_narration = ctk.CTkTextbox(right, wrap="word", height=120)
-        self.scene_narration.grid(row=3, column=0, padx=14, pady=(0, 4), sticky="nsew")
+        self.scene_narration = ctk.CTkTextbox(right, wrap="word", height=110)
+        self.scene_narration.grid(row=5, column=0, padx=14, pady=(0, 4), sticky="nsew")
         self.scene_estimate = ctk.CTkLabel(right, text="Est. 0.0s", text_color=("gray40", "gray70"))
-        self.scene_estimate.grid(row=4, column=0, padx=14, pady=(0, 6), sticky="w")
+        self.scene_estimate.grid(row=6, column=0, padx=14, pady=(0, 6), sticky="w")
 
         prompts = ctk.CTkFrame(right, fg_color="transparent")
-        prompts.grid(row=5, column=0, padx=10, pady=4, sticky="nsew")
+        prompts.grid(row=7, column=0, padx=10, pady=4, sticky="nsew")
         prompts.grid_columnconfigure((0, 1), weight=1)
         prompts.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(prompts, text="Kling video prompt", font=ctk.CTkFont(weight="bold")).grid(
@@ -387,13 +425,13 @@ class Studio(ctk.CTk):
         ctk.CTkLabel(prompts, text="ComfyUI image prompt", font=ctk.CTkFont(weight="bold")).grid(
             row=0, column=1, padx=4, pady=(0, 4), sticky="w"
         )
-        self.kling_prompt = ctk.CTkTextbox(prompts, wrap="word", height=90)
+        self.kling_prompt = ctk.CTkTextbox(prompts, wrap="word", height=80)
         self.kling_prompt.grid(row=1, column=0, padx=4, pady=0, sticky="nsew")
-        self.image_prompt = ctk.CTkTextbox(prompts, wrap="word", height=90)
+        self.image_prompt = ctk.CTkTextbox(prompts, wrap="word", height=80)
         self.image_prompt.grid(row=1, column=1, padx=4, pady=0, sticky="nsew")
 
         controls = ctk.CTkFrame(right, fg_color="transparent")
-        controls.grid(row=6, column=0, padx=14, pady=(8, 14), sticky="ew")
+        controls.grid(row=8, column=0, padx=14, pady=(8, 14), sticky="ew")
         ctk.CTkButton(controls, text="Update scene", command=self.update_selected_scene).pack(side="left")
         ctk.CTkButton(controls, text="Delete", command=self.delete_selected_scene).pack(side="left", padx=8)
         ctk.CTkButton(controls, text="AI prompts", command=self.ai_fill_selected_prompts).pack(side="left", padx=4)
@@ -555,9 +593,9 @@ class Studio(ctk.CTk):
             )
         else:
             text = (
-                "Easiest path (audiobooks / shorts): 1) Pick a Kokoro voice (Heart/Bella/Emma are strongest) → "
-                "2) Generate scene or Generate all → 3) Full narration → 4) Export → open DaVinci folder.\n"
-                "To clone your own voice, switch Engine to Clone (OpenAI API) and follow the steps shown there."
+                "Easiest path: 1) On Scenes, set Scene voice / Quick character per scene (male/female) → "
+                "2) Attach rain/thunder SFX if needed → 3) Generate all → 4) Full narration (mixes SFX when FFmpeg is set) → 5) Export.\n"
+                "Import story sounds with Import audio (converts to WAV in Documents\\AtoZ Voice Studio\\Sound Effects)."
             )
         self.voice_guide.configure(text=text)
 
@@ -1322,7 +1360,10 @@ class Studio(ctk.CTk):
         migrated = dict(scene)
         migrated.setdefault("narrationText", migrated.get("narration", ""))
         migrated.setdefault("voiceId", "")
+        migrated.setdefault("voiceLabel", "")
         migrated.setdefault("voiceSpeed", 1.0)
+        migrated.setdefault("sfxPath", "")
+        migrated.setdefault("sfxLabel", "")
         migrated.setdefault("audioPath", "")
         migrated.setdefault("audioDuration", 0)
         migrated.setdefault("audioFileSize", 0)
@@ -1431,9 +1472,15 @@ class Studio(ctk.CTk):
             child.destroy()
         for index, scene in enumerate(self.scenes):
             mark = "●" if scene.get("audioStatus") == "Complete" else "○"
+            voice_hint = ""
+            label = scene.get("voiceLabel") or ""
+            if label and label != SCENE_VOICE_DEFAULT:
+                short = label.split("(")[0].strip().split("-")[-1].strip() if "-" in label else label[:12]
+                voice_hint = f" [{short[:10]}]"
+            sfx_hint = " ♪" if scene.get("sfxPath") else ""
             ctk.CTkButton(
                 self.scene_list,
-                text=f"{index+1:02d} {mark}  {scene.get('title', 'Untitled')}",
+                text=f"{index+1:02d} {mark}  {scene.get('title', 'Untitled')}{voice_hint}{sfx_hint}",
                 anchor="w",
                 command=lambda idx=index: self.select_scene(idx),
             ).pack(fill="x", pady=3)
@@ -1457,6 +1504,14 @@ class Studio(ctk.CTk):
         self.kling_prompt.insert("1.0", scene.get("kling_prompt", ""))
         self.image_prompt.delete("1.0", "end")
         self.image_prompt.insert("1.0", scene.get("image_prompt", ""))
+        voice_label = scene.get("voiceLabel") or SCENE_VOICE_DEFAULT
+        if voice_label not in SCENE_VOICE_CHOICES:
+            voice_label = SCENE_VOICE_DEFAULT
+        self.scene_voice.set(voice_label)
+        preset = next((name for name, mapped in CHARACTER_VOICE_PRESETS.items() if mapped == voice_label), SCENE_VOICE_DEFAULT)
+        self.scene_character.set(preset)
+        sfx_name = scene.get("sfxLabel") or (Path(scene["sfxPath"]).name if scene.get("sfxPath") else "")
+        self.scene_sfx_label.configure(text=sfx_name or "None")
         self.voice_badge.configure(text=scene.get("audioStatus", "Not generated"))
         self.update_scene_estimate()
         audio_path = scene.get("audioPath") or ""
@@ -1473,6 +1528,10 @@ class Studio(ctk.CTk):
         for widget in [self.scene_narration, self.kling_prompt, self.image_prompt]:
             widget.delete("1.0", "end")
         self.scene_title.delete(0, "end")
+        if hasattr(self, "scene_voice"):
+            self.scene_voice.set(SCENE_VOICE_DEFAULT)
+            self.scene_character.set(SCENE_VOICE_DEFAULT)
+            self.scene_sfx_label.configure(text="None")
         if hasattr(self, "scene_estimate"):
             self.scene_estimate.configure(text="Est. 0.0s")
 
@@ -1486,6 +1545,115 @@ class Studio(ctk.CTk):
         scene["narration"] = self.scene_narration.get("1.0", "end-1c").strip()
         scene["kling_prompt"] = self.kling_prompt.get("1.0", "end-1c").strip()
         scene["image_prompt"] = self.image_prompt.get("1.0", "end-1c").strip()
+        voice_label = self.scene_voice.get() if hasattr(self, "scene_voice") else SCENE_VOICE_DEFAULT
+        scene["voiceLabel"] = "" if voice_label == SCENE_VOICE_DEFAULT else voice_label
+        if voice_label in VOICE_OPTIONS:
+            scene["voiceId"] = VOICE_OPTIONS[voice_label][1]
+
+    def apply_character_preset(self, preset: str) -> None:
+        mapped = CHARACTER_VOICE_PRESETS.get(preset, "")
+        self.scene_voice.set(mapped or SCENE_VOICE_DEFAULT)
+
+    def ffmpeg_path(self) -> str:
+        configured = str(self.settings.get("ffmpeg", {}).get("ffmpeg", "") or "")
+        ffmpeg, _ = detect_ffmpeg(configured)
+        return ffmpeg
+
+    def open_sfx_folder(self) -> None:
+        SFX_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(SFX_DIR)
+
+    def import_sfx_to_library(self) -> Path | None:
+        selected = filedialog.askopenfilename(
+            title="Import sound effect (converted to WAV)",
+            filetypes=[
+                ("Audio", "*.wav *.mp3 *.m4a *.flac *.ogg *.aac *.wma"),
+                ("WAV", "*.wav"),
+                ("MP3", "*.mp3"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not selected:
+            return None
+        source = Path(selected)
+        dest = SFX_DIR / f"{safe_name(source.stem)}.wav"
+        counter = 2
+        while dest.exists() and dest.resolve() != source.resolve():
+            dest = SFX_DIR / f"{safe_name(source.stem)}_{counter}.wav"
+            counter += 1
+        try:
+            if source.suffix.lower() == ".wav":
+                try:
+                    validate_wav(source)
+                    if dest.resolve() != source.resolve():
+                        shutil.copy2(source, dest)
+                except ValueError:
+                    convert_to_studio_wav(self.ffmpeg_path(), source, dest)
+            else:
+                convert_to_studio_wav(self.ffmpeg_path(), source, dest)
+            validate_wav(dest)
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Could not import audio.\n{exc}")
+            return None
+        self.status.configure(text=f"SFX imported: {dest.name}")
+        messagebox.showinfo(APP_NAME, f"Saved to Documents\\AtoZ Voice Studio\\Sound Effects\\{dest.name}")
+        return dest
+
+    def attach_scene_sfx(self) -> None:
+        if self.selected_scene_index is None:
+            messagebox.showwarning(APP_NAME, "Select a scene first.")
+            return
+        SFX_DIR.mkdir(parents=True, exist_ok=True)
+        selected = filedialog.askopenfilename(
+            title="Attach sound effect to scene",
+            initialdir=str(SFX_DIR),
+            filetypes=[
+                ("Audio", "*.wav *.mp3 *.m4a *.flac *.ogg *.aac"),
+                ("WAV", "*.wav"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not selected:
+            return
+        source = Path(selected)
+        if source.parent.resolve() != SFX_DIR.resolve() or source.suffix.lower() != ".wav":
+            imported = None
+            try:
+                if source.suffix.lower() != ".wav" or source.parent.resolve() != SFX_DIR.resolve():
+                    dest = SFX_DIR / f"{safe_name(source.stem)}.wav"
+                    if source.suffix.lower() == ".wav":
+                        try:
+                            validate_wav(source)
+                            shutil.copy2(source, dest)
+                        except ValueError:
+                            convert_to_studio_wav(self.ffmpeg_path(), source, dest)
+                    else:
+                        convert_to_studio_wav(self.ffmpeg_path(), source, dest)
+                    imported = dest
+                else:
+                    imported = source
+            except Exception as exc:
+                messagebox.showerror(APP_NAME, str(exc))
+                return
+            source = imported
+        self.capture_selected_scene()
+        scene = self.scenes[self.selected_scene_index]
+        scene["sfxPath"] = str(source)
+        scene["sfxLabel"] = source.name
+        self.scene_sfx_label.configure(text=source.name)
+        self.save_project()
+        self.refresh_scene_list(prefer=self.selected_scene_index)
+
+    def clear_scene_sfx(self) -> None:
+        if self.selected_scene_index is None:
+            return
+        self.capture_selected_scene()
+        scene = self.scenes[self.selected_scene_index]
+        scene["sfxPath"] = ""
+        scene["sfxLabel"] = ""
+        self.scene_sfx_label.configure(text="None")
+        self.save_project()
+        self.refresh_scene_list(prefer=self.selected_scene_index)
 
     def update_scene_estimate(self) -> None:
         if not hasattr(self, "scene_estimate"):
@@ -1670,11 +1838,37 @@ class Studio(ctk.CTk):
                 self.after(0, lambda: self.finish_voice_run(result, [], True))
                 return
             if combine:
-                paths = [Path(scene["audioPath"]) for scene in self.scenes if scene.get("audioStatus") == "Complete"]
-                if len(paths) != len([s for s in self.scenes if clean_text(s.get("narration", ""))]): raise ValueError("Generate all required scene narration before combining.")
-                self.after(0, lambda: self.set_voice_busy(True, "Verifying", .9))
+                ready = [scene for scene in self.scenes if scene.get("audioStatus") == "Complete" and Path(scene.get("audioPath", "")).is_file()]
+                needed = [scene for scene in self.scenes if clean_text(scene.get("narration", ""))]
+                if len(ready) != len(needed):
+                    raise ValueError("Generate all required scene narration before combining.")
+                paths = [Path(scene["audioPath"]) for scene in ready]
+                self.after(0, lambda: self.set_voice_busy(True, "Combining", .85))
                 info = combine_wavs(paths, project / "audio" / "narration.wav", float(self.settings.get("narration", {}).get("silence", .25)))
-                self.project_narration = {"combinedNarrationPath": info["path"], "combinedNarrationDuration": info["duration"], "narrationStatus": "Complete", "narrationUpdatedAt": datetime.now().isoformat(timespec="seconds")}
+                silence = float(self.settings.get("narration", {}).get("silence", .25))
+                cursor = 0.0
+                sfx_events = []
+                for scene in ready:
+                    sfx = Path(scene.get("sfxPath", "") or "")
+                    if sfx.is_file():
+                        sfx_events.append((sfx, cursor))
+                    cursor += float(scene.get("audioDuration") or 0) + silence
+                mixed_path = project / "audio" / "narration_with_sfx.wav"
+                if sfx_events:
+                    try:
+                        self.after(0, lambda: self.set_voice_busy(True, "Mixing SFX", .92))
+                        mix_narration_with_sfx(self.ffmpeg_path(), Path(info["path"]), sfx_events, mixed_path)
+                        info = validate_wav(mixed_path)
+                        info["path"] = str(mixed_path)
+                    except Exception as exc:
+                        self.after(0, lambda: self.append_voice_log(f"SFX mix skipped: {exc}"))
+                self.project_narration = {
+                    "combinedNarrationPath": info["path"],
+                    "combinedNarrationDuration": info["duration"],
+                    "narrationStatus": "Complete",
+                    "narrationUpdatedAt": datetime.now().isoformat(timespec="seconds"),
+                    "sfxMixed": bool(sfx_events and Path(info["path"]).name.endswith("_with_sfx.wav")),
+                }
                 self.after(0, lambda: self.finish_combination(info))
                 return
             required = [i for i in indexes if clean_text(self.scenes[i].get("narration", ""))]
@@ -1682,14 +1876,36 @@ class Studio(ctk.CTk):
             for index in required:
                 scene = self.scenes[index]
                 if scene.get("audioStatus") == "Complete" and not regenerate and Path(scene.get("audioPath", "")).is_file():
-                    skipped += 1; continue
+                    skipped += 1
+                    continue
                 scene["audioStatus"], scene["audioError"] = "Queued", ""
                 output = project / "audio" / "scenes" / f"scene-{index+1:03d}.wav"
-                queued.append({"index": index, "text": scene.get("narration", ""), "output": str(output)})
-            if len(queued) > 1:
-                results = self.voice_provider.generate_batch(queued, voice_id, language, speed, self.voice_event)
-            else:
-                results = {job["index"]: self.voice_provider.generate(job["text"], voice_id, language, speed, Path(job["output"]), self.voice_event) for job in queued}
+                label = scene.get("voiceLabel") or ""
+                if engine == "Kokoro" and label in VOICE_OPTIONS:
+                    scene_lang, scene_voice = VOICE_OPTIONS[label]
+                else:
+                    scene_lang, scene_voice = language, voice_id
+                queued.append({
+                    "index": index,
+                    "text": scene.get("narration", ""),
+                    "output": str(output),
+                    "voice": scene_voice,
+                    "language": scene_lang or language,
+                    "voiceLabel": label or self.voice_menu.get(),
+                })
+            results: dict[int, object] = {}
+            groups: dict[tuple[str, str], list] = defaultdict(list)
+            for job in queued:
+                groups[(job["voice"], job["language"])].append(job)
+            for (group_voice, group_lang), jobs in groups.items():
+                if len(jobs) > 1:
+                    batch_results = self.voice_provider.generate_batch(jobs, group_voice, group_lang, speed, self.voice_event)
+                    results.update(batch_results)
+                else:
+                    job = jobs[0]
+                    results[job["index"]] = self.voice_provider.generate(
+                        job["text"], group_voice, group_lang, speed, Path(job["output"]), self.voice_event
+                    )
             for job in queued:
                 index, result = job["index"], results[job["index"]]
                 scene = self.scenes[index]
@@ -1697,9 +1913,21 @@ class Studio(ctk.CTk):
                     scene["audioStatus"] = "Cancelled" if result.cancelled else "Failed"
                     scene["audioError"] = result.error
                     self.failed_voice_indexes.append(index)
-                    if result.cancelled: break
+                    if result.cancelled:
+                        break
                     continue
-                scene.update({"narrationText": clean_text(scene.get("narration", "")), "voiceId": voice_id, "voiceSpeed": speed, "audioPath": result.output, "audioDuration": result.duration, "audioFileSize": result.file_size, "audioStatus": "Complete", "audioGeneratedAt": datetime.now().isoformat(timespec="seconds"), "audioError": ""})
+                scene.update({
+                    "narrationText": clean_text(scene.get("narration", "")),
+                    "voiceId": job["voice"],
+                    "voiceLabel": job.get("voiceLabel", ""),
+                    "voiceSpeed": speed,
+                    "audioPath": result.output,
+                    "audioDuration": result.duration,
+                    "audioFileSize": result.file_size,
+                    "audioStatus": "Complete",
+                    "audioGeneratedAt": datetime.now().isoformat(timespec="seconds"),
+                    "audioError": "",
+                })
                 completed += 1
                 self.after(0, self.save_project)
             message = f"Complete: {completed}; skipped: {skipped}; failed: {len(self.failed_voice_indexes)}; elapsed: {time.monotonic()-started:.1f}s"
@@ -1876,16 +2104,18 @@ class Studio(ctk.CTk):
             if not messagebox.askyesno("Export validation", detail):
                 return
 
-        production_rows = ["scene,title,narration_file,duration_seconds,kling_prompt_file,image_prompt_file"]
-        duration_rows = ["scene,title,duration_seconds,source,word_count"]
+        production_rows = ["scene,title,voice,narration_file,sfx_file,duration_seconds,kling_prompt_file,image_prompt_file"]
+        duration_rows = ["scene,title,duration_seconds,source,word_count,voice,sfx"]
         srt_blocks: list[str] = []
         cursor = 0.0
         speed = float(self.speed.get())
         silence = float(self.settings.get("narration", {}).get("silence", 0.25))
         davinci = self.current_project_path / "06_davinci"
         voice_out = self.current_project_path / "02_voice"
+        sfx_out = self.current_project_path / "05_sfx"
         davinci.mkdir(parents=True, exist_ok=True)
         voice_out.mkdir(parents=True, exist_ok=True)
+        sfx_out.mkdir(parents=True, exist_ok=True)
 
         for i, scene in enumerate(self.scenes, 1):
             base = f"{i:02d}_{safe_name(scene.get('title','scene'))}"
@@ -1898,15 +2128,24 @@ class Studio(ctk.CTk):
                 dest = voice_out / f"{base}.wav"
                 shutil.copy2(narration_file, dest)
                 narration_file = str(dest)
+            sfx_file = ""
+            sfx_src = Path(scene.get("sfxPath", "") or "")
+            if sfx_src.is_file():
+                sfx_dest = sfx_out / f"{base}_{safe_name(sfx_src.stem)}.wav"
+                shutil.copy2(sfx_src, sfx_dest)
+                sfx_file = str(sfx_dest)
             measured = float(scene.get("audioDuration") or 0)
             text = scene.get("narration", "")
             duration = measured or estimate_seconds(text, speed)
             source = "audio" if measured else "estimate"
+            voice_name = scene.get("voiceLabel") or "project-default"
             production_rows.append(
                 ",".join([
                     str(i),
                     csv_cell(scene.get("title", "")),
+                    csv_cell(voice_name),
                     csv_cell(narration_file),
+                    csv_cell(sfx_file),
                     f"{duration:.2f}",
                     csv_cell(f"03_kling/{base}.txt"),
                     csv_cell(f"04_images/{base}.txt"),
@@ -1919,6 +2158,8 @@ class Studio(ctk.CTk):
                     f"{duration:.2f}",
                     source,
                     str(len(re.findall(r"\w+", text))),
+                    csv_cell(voice_name),
+                    csv_cell(Path(sfx_file).name if sfx_file else ""),
                 ])
             )
             if clean_text(text):
@@ -1938,13 +2179,14 @@ class Studio(ctk.CTk):
         (davinci / "subtitles.srt").write_text("\n".join(srt_blocks).strip() + ("\n" if srt_blocks else ""), encoding="utf-8")
         (davinci / "README_IMPORT.txt").write_text(
             "DaVinci Resolve import\n"
-            "1. File > Import > Media: bring in 02_voice/*.wav (or full_narration.wav) and your video clips.\n"
-            "2. Drop clips on V1, narration on A1; trim to match duration_report.csv.\n"
-            "3. File > Import > Subtitle: subtitles.srt for captions (YouTube/TikTok).\n"
-            "4. For audiobook-only uploads, export audio from the timeline or use full_narration.wav directly.\n",
+            "1. Import 02_voice/*.wav (or full_narration.wav) and 05_sfx/*.wav plus your video clips.\n"
+            "2. Video on V1, narration on A1, SFX on A2; use duration_report.csv for timing.\n"
+            "3. Import subtitles.srt for YouTube/TikTok captions.\n"
+            "4. If Full narration mixed SFX, use narration_with_sfx.wav as a single bed track.\n"
+            "5. Scene voices: set per scene on the Scenes tab (male/female/character), then Generate all.\n",
             encoding="utf-8",
         )
-        note = "Exported WAV copies, production_sheet.csv, duration_report.csv, subtitles.srt and README_IMPORT.txt."
+        note = "Exported voice WAVs, SFX, production_sheet.csv, duration_report.csv, subtitles.srt and README_IMPORT.txt."
         if warnings:
             note += " Some scenes were incomplete."
         self.export_status.configure(text=note)

@@ -223,6 +223,57 @@ def test_kling_api(config: dict, api_key: str) -> dict:
         return {"ok": False, "reason": f"Kling API test failed: {exc}"}
 
 
+def convert_to_studio_wav(ffmpeg: str, source: Path, destination: Path, sample_rate: int = 24000) -> dict:
+    """Convert any FFmpeg-readable audio into mono 24 kHz WAV for the studio."""
+    if not ffmpeg or not Path(ffmpeg).is_file():
+        raise FileNotFoundError("FFmpeg is not configured. Set it in Settings → FFmpeg.")
+    if not source.is_file():
+        raise FileNotFoundError(f"Audio file not found: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.stem + ".tmp.wav")
+    temporary.unlink(missing_ok=True)
+    command = [
+        ffmpeg, "-y", "-i", str(source),
+        "-ac", "1", "-ar", str(sample_rate),
+        "-c:a", "pcm_s16le",
+        str(temporary),
+    ]
+    result = ProcessRunner().run(command, 180)
+    if not result.ok or not temporary.is_file():
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(result.stderr.strip() or f"FFmpeg failed converting {source.name}")
+    os.replace(temporary, destination)
+    return {"path": str(destination), "size": destination.stat().st_size, "command": command}
+
+
+def mix_narration_with_sfx(ffmpeg: str, narration: Path, events: list[tuple[Path, float]], output: Path, sfx_volume: float = 0.35) -> dict:
+    """Overlay timed SFX under a narration WAV. events = [(sfx_path, start_seconds), ...]."""
+    if not events:
+        shutil.copy2(narration, output)
+        return {"path": str(output), "mixed": False}
+    if not ffmpeg or not Path(ffmpeg).is_file():
+        raise FileNotFoundError("FFmpeg is not configured. Set it in Settings → FFmpeg.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.stem + ".tmp.wav")
+    inputs = ["-i", str(narration)]
+    filter_parts = []
+    for index, (path, start) in enumerate(events, start=1):
+        inputs.extend(["-i", str(path)])
+        delay_ms = max(0, int(round(float(start) * 1000)))
+        filter_parts.append(
+            f"[{index}:a]volume={sfx_volume},adelay={delay_ms}|{delay_ms}[s{index}]"
+        )
+    mix_inputs = "[0:a]" + "".join(f"[s{i}]" for i in range(1, len(events) + 1))
+    filter_parts.append(f"{mix_inputs}amix=inputs={len(events)+1}:duration=first:dropout_transition=0[out]")
+    command = [ffmpeg, "-y", *inputs, "-filter_complex", ";".join(filter_parts), "-map", "[out]", str(temporary)]
+    result = ProcessRunner().run(command, 300)
+    if not result.ok or not temporary.is_file():
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(result.stderr.strip() or "FFmpeg failed mixing narration and SFX")
+    os.replace(temporary, output)
+    return {"path": str(output), "mixed": True, "sfx_count": len(events)}
+
+
 def detect_ffmpeg(configured: str = "") -> tuple[str, str]:
     downloads = Path.home() / "Downloads"
     downloaded = list(downloads.glob("ffmpeg*/bin/ffmpeg.exe")) + list(downloads.glob("ComfyUI*/ffmpeg*/bin/ffmpeg.exe"))
