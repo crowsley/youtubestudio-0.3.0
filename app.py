@@ -27,8 +27,11 @@ if sys.stdout is None:
 
 import customtkinter as ctk
 from connections import CredentialStore, detect_ffmpeg, detect_python, test_comfyui, test_ffmpeg, test_kling_api, test_kokoro, validate_workflow
-from narration import KokoroNarrationProvider, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
+from narration import CloneNarrationProvider, KokoroNarrationProvider, VibeVoiceNarrationProvider, WindowsAudioPlayer, combine_wavs, clean_text, validate_wav
 from settings import DATA_DIR, SettingsStore, redact, validate_directory
+import urllib.error
+import urllib.request
+import shutil
 
 APP_NAME = "AtoZ Voice Studio"
 PROJECT_URL = "https://github.com/crowsley/atoz-voice-studio"
@@ -38,19 +41,50 @@ PROJECTS_DIR = USER_DATA_DIR / "projects"
 OUTPUT_DIR = USER_DATA_DIR / "output"
 VERSION_FILE = BASE_DIR / "version.json"
 
+# Grades from Kokoro VOICES.md — best English first for audiobook narration.
 VOICE_OPTIONS = {
     "American Female - Heart (A)": ("a", "af_heart"),
     "American Female - Bella (A-)": ("a", "af_bella"),
-    "British Female - Emma (B-)": ("b", "bf_emma"),
-    "British Female - Isabella (C)": ("b", "bf_isabella"),
-    "British Male - George (C)": ("b", "bm_george"),
-    "British Male - Lewis (D+)": ("b", "bm_lewis"),
+    "American Female - Nicole (B-)": ("a", "af_nicole"),
+    "American Female - Aoede (C+)": ("a", "af_aoede"),
+    "American Female - Kore (C+)": ("a", "af_kore"),
+    "American Female - Sarah (C+)": ("a", "af_sarah"),
+    "American Female - Alloy (C)": ("a", "af_alloy"),
+    "American Female - Nova (C)": ("a", "af_nova"),
+    "American Female - Sky (C-)": ("a", "af_sky"),
+    "American Female - Jessica (D)": ("a", "af_jessica"),
+    "American Female - River (D)": ("a", "af_river"),
+    "American Male - Fenrir (C+)": ("a", "am_fenrir"),
     "American Male - Michael (C+)": ("a", "am_michael"),
     "American Male - Puck (C+)": ("a", "am_puck"),
+    "American Male - Echo (D)": ("a", "am_echo"),
+    "American Male - Eric (D)": ("a", "am_eric"),
+    "American Male - Liam (D)": ("a", "am_liam"),
+    "American Male - Onyx (D)": ("a", "am_onyx"),
+    "American Male - Adam (F+)": ("a", "am_adam"),
+    "American Male - Santa (D-)": ("a", "am_santa"),
+    "British Female - Emma (B-)": ("b", "bf_emma"),
+    "British Female - Isabella (C)": ("b", "bf_isabella"),
+    "British Female - Alice (D)": ("b", "bf_alice"),
+    "British Female - Lily (D)": ("b", "bf_lily"),
+    "British Male - Fable (C)": ("b", "bm_fable"),
+    "British Male - George (C)": ("b", "bm_george"),
+    "British Male - Daniel (D)": ("b", "bm_daniel"),
+    "British Male - Lewis (D+)": ("b", "bm_lewis"),
 }
 VIBEVOICE_OPTIONS = {name.title(): ("", name) for name in ("alloy", "echo", "fable", "onyx", "nova", "shimmer")}
+CLONE_OPTIONS = {
+    "Reference sample (clone)": ("", "reference"),
+    "Alloy": ("", "alloy"),
+    "Echo": ("", "echo"),
+    "Fable": ("", "fable"),
+    "Onyx": ("", "onyx"),
+    "Nova": ("", "nova"),
+    "Shimmer": ("", "shimmer"),
+}
 LANGUAGE_CODES = {"American English": "a", "British English": "b"}
 LANGUAGE_LABELS = {code: label for label, code in LANGUAGE_CODES.items()}
+ENGINE_OPTIONS = ["Kokoro", "VibeVoice Realtime", "Clone (OpenAI API)"]
 
 PROJECT_FOLDERS = [
     "01_script",
@@ -344,6 +378,8 @@ class Studio(ctk.CTk):
         controls.grid(row=6, column=0, padx=14, pady=(8, 14), sticky="ew")
         ctk.CTkButton(controls, text="Update scene", command=self.update_selected_scene).pack(side="left")
         ctk.CTkButton(controls, text="Delete", command=self.delete_selected_scene).pack(side="left", padx=8)
+        ctk.CTkButton(controls, text="AI prompts", command=self.ai_fill_selected_prompts).pack(side="left", padx=4)
+        ctk.CTkButton(controls, text="AI all scenes", command=self.ai_fill_all_prompts).pack(side="left", padx=4)
         ctk.CTkButton(
             controls, text="Copy Kling",
             command=lambda: self.copy_text(self.kling_prompt.get("1.0", "end-1c")),
@@ -368,12 +404,12 @@ class Studio(ctk.CTk):
         self.voice_badge = ctk.CTkLabel(settings, text="Not generated", corner_radius=8, fg_color=("gray75", "gray30"), width=120)
         self.voice_badge.grid(row=0, column=0, padx=12, pady=12)
         ctk.CTkLabel(settings, text="Engine").grid(row=0, column=1, padx=(8, 4))
-        self.voice_engine = ctk.CTkOptionMenu(settings, values=["Kokoro", "VibeVoice Realtime"], command=self.change_voice_engine, width=150)
+        self.voice_engine = ctk.CTkOptionMenu(settings, values=ENGINE_OPTIONS, command=self.change_voice_engine, width=160)
         self.voice_engine.set("Kokoro")
         self.voice_engine.grid(row=0, column=2, padx=4, pady=12)
         ctk.CTkLabel(settings, text="Voice").grid(row=0, column=3, padx=(8, 4))
         self.voice_menu = ctk.CTkOptionMenu(
-            settings, values=list(VOICE_OPTIONS), width=230
+            settings, values=list(VOICE_OPTIONS), width=250
         )
         self.voice_menu.set("American Female - Heart (A)")
         self.voice_menu.grid(row=0, column=4, padx=4, pady=12)
@@ -441,10 +477,15 @@ class Studio(ctk.CTk):
         self.audio_details.pack(side="left", padx=8)
 
     def change_voice_engine(self, engine: str) -> None:
-        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
+        if engine == "VibeVoice Realtime":
+            options = VIBEVOICE_OPTIONS
+        elif engine == "Clone (OpenAI API)":
+            options = CLONE_OPTIONS
+        else:
+            options = VOICE_OPTIONS
         self.voice_menu.configure(values=list(options))
         self.voice_menu.set(next(iter(options)))
-        self.voice_language.configure(state="disabled" if engine == "VibeVoice Realtime" else "normal")
+        self.voice_language.configure(state="disabled" if engine != "Kokoro" else "normal")
 
     def create_prompts_tab(self) -> None:
         tab = self.tabs.add("Kling & Images")
@@ -482,7 +523,7 @@ class Studio(ctk.CTk):
 
         ctk.CTkLabel(
             tab,
-            text="Export narration paths, prompts, an SRT subtitle file and a duration report into the project folders for DaVinci Resolve.",
+            text="For YouTube / TikTok / audiobooks: generate narration here, then Import the WAV + subtitles.srt into DaVinci Resolve and place audio on the timeline under your clips. This app does not edit video inside DaVinci.",
             wraplength=800,
             justify="left",
         ).grid(row=1, column=0, padx=16, pady=(0, 18), sticky="w")
@@ -493,12 +534,17 @@ class Studio(ctk.CTk):
         ).grid(row=2, column=0, padx=16, pady=8, sticky="w")
 
         ctk.CTkButton(
-            tab, text="Open project folder",
-            command=self.open_project_folder, width=220
+            tab, text="Open DaVinci folder",
+            command=self.open_davinci_folder, width=220
         ).grid(row=3, column=0, padx=16, pady=8, sticky="w")
 
+        ctk.CTkButton(
+            tab, text="Open project folder",
+            command=self.open_project_folder, width=220
+        ).grid(row=4, column=0, padx=16, pady=8, sticky="w")
+
         self.export_status = ctk.CTkLabel(tab, text="")
-        self.export_status.grid(row=4, column=0, padx=16, pady=16, sticky="w")
+        self.export_status.grid(row=5, column=0, padx=16, pady=16, sticky="w")
 
     def create_settings_tab(self) -> None:
         tab = self.tabs.add("Settings")
@@ -550,7 +596,21 @@ class Studio(ctk.CTk):
         self._setting_entry(vibevoice, 4, "Request timeout", "vibevoice.timeout")
         self._button_row(vibevoice, 5, [("Open server", lambda: webbrowser.open(self._entry_value("vibevoice.base_url")))])
 
-        comfy = self._settings_section(page, "ComfyUI", 3, "Connected requires a successful generated image")
+        clone = self._settings_section(page, "Clone (OpenAI-compatible)", 3, "Point at a local/cloud /v1/audio/speech server that supports voice cloning; use a clean 10–30s WAV sample you own")
+        self._setting_entry(clone, 1, "Base URL", "clone.base_url")
+        self._setting_entry(clone, 2, "Model", "clone.model")
+        self._setting_entry(clone, 3, "Default voice id", "clone.voice")
+        self._setting_entry(clone, 4, "Reference WAV sample", "clone.reference_wav", browse="file")
+        self._setting_entry(clone, 5, "API key (optional)", "secret.clone_api_key", secret=True)
+        self._setting_entry(clone, 6, "Request timeout", "clone.timeout")
+
+        ollama = self._settings_section(page, "Ollama (AI prompts)", 4, "Local LLM for Kling/image prompt assist from scene narration")
+        self._setting_entry(ollama, 1, "Base URL", "ollama.base_url")
+        self._setting_entry(ollama, 2, "Model", "ollama.model")
+        self._setting_entry(ollama, 3, "Request timeout", "ollama.timeout")
+        self._button_row(ollama, 4, [("Test Ollama", self.test_ollama)])
+
+        comfy = self._settings_section(page, "ComfyUI", 5, "Connected requires a successful generated image")
         self._status_badge(comfy, "comfyui")
         fields = [
             ("Base URL", "comfyui.base_url", None), ("Workflow JSON", "comfyui.workflow_file", "file"),
@@ -570,7 +630,7 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("comfyui")),
         ])
 
-        kling = self._settings_section(page, "Kling", 4, "Manual Import never reports Connected")
+        kling = self._settings_section(page, "Kling", 6, "Manual Import never reports Connected")
         self._status_badge(kling, "kling", "Manual mode")
         self._setting_option(kling, 1, "Mode", "kling.mode", ["Manual Import", "Official API"])
         for row, (label, key, secret) in enumerate([
@@ -586,7 +646,7 @@ class Studio(ctk.CTk):
             ("Open import folder", lambda: self.open_setting_path("kling.import_dir")),
         ])
 
-        ffmpeg = self._settings_section(page, "FFmpeg", 5, "Connected requires creating and probing a real MP4")
+        ffmpeg = self._settings_section(page, "FFmpeg", 7, "Connected requires creating and probing a real MP4")
         self._status_badge(ffmpeg, "ffmpeg")
         self._setting_entry(ffmpeg, 1, "FFmpeg executable", "ffmpeg.ffmpeg", browse="file")
         self._setting_entry(ffmpeg, 2, "FFprobe executable", "ffmpeg.ffprobe", browse="file")
@@ -597,7 +657,7 @@ class Studio(ctk.CTk):
             ("View test log", lambda: self.view_test_log("ffmpeg")),
         ])
 
-        output = self._settings_section(page, "Output", 6, "Folders and narration gap (video encode settings removed — app does not render video yet)")
+        output = self._settings_section(page, "Output", 8, "Folders and narration gap (video encode settings removed — app does not render video yet)")
         output_fields = [
             ("Project root", "output.project_root", "directory"),
             ("Export directory", "output.export_dir", "directory"),
@@ -608,7 +668,7 @@ class Studio(ctk.CTk):
         for row, (label, key, browse) in enumerate(output_fields, 1):
             self._setting_entry(output, row, label, key, browse=browse)
 
-        diagnostics = self._settings_section(page, "Diagnostics", 7, "Truthful service status and redacted logs")
+        diagnostics = self._settings_section(page, "Diagnostics", 9, "Truthful service status and redacted logs")
         self.diagnostics_box = ctk.CTkTextbox(diagnostics, height=180)
         self.diagnostics_box.grid(row=1, column=0, columnspan=3, padx=10, pady=8, sticky="ew")
         self._button_row(diagnostics, 2, [
@@ -619,7 +679,7 @@ class Studio(ctk.CTk):
             ("Clear temporary files", self.clear_temporary_files),
         ])
 
-        about = self._settings_section(page, "About", 8, f"{APP_NAME} v{self.version}")
+        about = self._settings_section(page, "About", 10, f"{APP_NAME} v{self.version}")
         ctk.CTkLabel(
             about,
             text="Free community software under the MIT License.\nA local production studio for YouTube videos, narration and audiobooks. Built with Kokoro, VibeVoice and other open-source components; third-party components retain their own licences.",
@@ -1014,9 +1074,16 @@ class Studio(ctk.CTk):
         self.scenes = [self.migrate_scene(scene) for scene in data.get("scenes", [])]
         self.project_narration = data.get("narration", {})
         engine = data.get("voice_engine", "Kokoro")
+        if engine not in ENGINE_OPTIONS:
+            engine = "Kokoro"
         self.voice_engine.set(engine)
         self.change_voice_engine(engine)
-        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
+        if engine == "VibeVoice Realtime":
+            options = VIBEVOICE_OPTIONS
+        elif engine == "Clone (OpenAI API)":
+            options = CLONE_OPTIONS
+        else:
+            options = VOICE_OPTIONS
         if data.get("voice") in options:
             self.voice_menu.set(data["voice"])
         self.speed.set(float(data.get("speed", 1.0)))
@@ -1302,9 +1369,20 @@ class Studio(ctk.CTk):
         if not preview_text and not combine and not self.validate_voice_request(indexes):
             return
         engine = self.voice_engine.get()
-        config = dict(self.settings["vibevoice" if engine == "VibeVoice Realtime" else "kokoro"])
+        if engine == "VibeVoice Realtime":
+            config = dict(self.settings["vibevoice"])
+            options = VIBEVOICE_OPTIONS
+        elif engine == "Clone (OpenAI API)":
+            config = dict(self.settings["clone"])
+            try:
+                config["api_key"] = self.credentials.get("clone_api_key")
+            except Exception:
+                config["api_key"] = ""
+            options = CLONE_OPTIONS
+        else:
+            config = dict(self.settings["kokoro"])
+            options = VOICE_OPTIONS
         label = self.voice_menu.get()
-        options = VIBEVOICE_OPTIONS if engine == "VibeVoice Realtime" else VOICE_OPTIONS
         language, voice_id = options[label]
         lang_code = LANGUAGE_CODES.get(self.voice_language.get(), self.voice_language.get())
         language, speed = language or lang_code, float(self.speed.get())
@@ -1320,7 +1398,12 @@ class Studio(ctk.CTk):
     def voice_worker(self, indexes: list[int], config: dict, engine: str, voice_id: str, language: str, speed: float, regenerate: bool, preview_text: str, combine: bool) -> None:
         project = self.current_project_path
         log_file = project / "logs" / "voice-generation.log"
-        provider_type = VibeVoiceNarrationProvider if engine == "VibeVoice Realtime" else KokoroNarrationProvider
+        if engine == "VibeVoice Realtime":
+            provider_type = VibeVoiceNarrationProvider
+        elif engine == "Clone (OpenAI API)":
+            provider_type = CloneNarrationProvider
+        else:
+            provider_type = KokoroNarrationProvider
         self.voice_provider = provider_type(config, log_file)
         started, completed, skipped = time.monotonic(), 0, 0
         try:
@@ -1488,12 +1571,31 @@ class Studio(ctk.CTk):
         self.capture_selected_scene()
         self.save_project()
 
+        warnings = []
+        missing_audio = [i + 1 for i, s in enumerate(self.scenes) if clean_text(s.get("narration", "")) and s.get("audioStatus") != "Complete"]
+        missing_kling = [i + 1 for i, s in enumerate(self.scenes) if not str(s.get("kling_prompt", "")).strip()]
+        missing_image = [i + 1 for i, s in enumerate(self.scenes) if not str(s.get("image_prompt", "")).strip()]
+        if missing_audio:
+            warnings.append(f"Scenes without narration audio: {', '.join(map(str, missing_audio))}")
+        if missing_kling:
+            warnings.append(f"Scenes without Kling prompts: {', '.join(map(str, missing_kling))}")
+        if missing_image:
+            warnings.append(f"Scenes without image prompts: {', '.join(map(str, missing_image))}")
+        if warnings:
+            detail = "\n".join(warnings) + "\n\nExport anyway?"
+            if not messagebox.askyesno("Export validation", detail):
+                return
+
         production_rows = ["scene,title,narration_file,duration_seconds,kling_prompt_file,image_prompt_file"]
         duration_rows = ["scene,title,duration_seconds,source,word_count"]
         srt_blocks: list[str] = []
         cursor = 0.0
         speed = float(self.speed.get())
         silence = float(self.settings.get("narration", {}).get("silence", 0.25))
+        davinci = self.current_project_path / "06_davinci"
+        voice_out = self.current_project_path / "02_voice"
+        davinci.mkdir(parents=True, exist_ok=True)
+        voice_out.mkdir(parents=True, exist_ok=True)
 
         for i, scene in enumerate(self.scenes, 1):
             base = f"{i:02d}_{safe_name(scene.get('title','scene'))}"
@@ -1502,6 +1604,10 @@ class Studio(ctk.CTk):
             kling_file.write_text(scene.get("kling_prompt", ""), encoding="utf-8")
             image_file.write_text(scene.get("image_prompt", ""), encoding="utf-8")
             narration_file = scene.get("audioPath", "")
+            if narration_file and Path(narration_file).is_file():
+                dest = voice_out / f"{base}.wav"
+                shutil.copy2(narration_file, dest)
+                narration_file = str(dest)
             measured = float(scene.get("audioDuration") or 0)
             text = scene.get("narration", "")
             duration = measured or estimate_seconds(text, speed)
@@ -1532,15 +1638,150 @@ class Studio(ctk.CTk):
                 )
                 cursor = end + silence
 
-        davinci = self.current_project_path / "06_davinci"
-        davinci.mkdir(parents=True, exist_ok=True)
+        combined = Path(self.project_narration.get("combinedNarrationPath", "") or "")
+        if combined.is_file():
+            shutil.copy2(combined, davinci / "full_narration.wav")
+            shutil.copy2(combined, voice_out / "full_narration.wav")
+
         (davinci / "production_sheet.csv").write_text("\n".join(production_rows), encoding="utf-8")
         (davinci / "duration_report.csv").write_text("\n".join(duration_rows), encoding="utf-8")
         (davinci / "subtitles.srt").write_text("\n".join(srt_blocks).strip() + ("\n" if srt_blocks else ""), encoding="utf-8")
-        self.export_status.configure(
-            text="Exported production_sheet.csv, duration_report.csv and subtitles.srt into 06_davinci."
+        (davinci / "README_IMPORT.txt").write_text(
+            "DaVinci Resolve import\n"
+            "1. File > Import > Media: bring in 02_voice/*.wav (or full_narration.wav) and your video clips.\n"
+            "2. Drop clips on V1, narration on A1; trim to match duration_report.csv.\n"
+            "3. File > Import > Subtitle: subtitles.srt for captions (YouTube/TikTok).\n"
+            "4. For audiobook-only uploads, export audio from the timeline or use full_narration.wav directly.\n",
+            encoding="utf-8",
         )
+        note = "Exported WAV copies, production_sheet.csv, duration_report.csv, subtitles.srt and README_IMPORT.txt."
+        if warnings:
+            note += " Some scenes were incomplete."
+        self.export_status.configure(text=note)
         self.refresh_progress()
+
+    def open_davinci_folder(self) -> None:
+        if not self.current_project_path:
+            messagebox.showwarning(APP_NAME, "Create or open a project first.")
+            return
+        folder = self.current_project_path / "06_davinci"
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(folder)
+
+    def test_ollama(self) -> None:
+        if not self.save_settings_ui():
+            return
+        def worker() -> None:
+            try:
+                text = self.ollama_generate("Reply with exactly: OK")
+                self.after(0, lambda: messagebox.showinfo("Ollama", f"Connected. Model replied: {text[:120]}"))
+            except Exception as exc:
+                self.after(0, lambda: messagebox.showerror("Ollama", str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def ollama_generate(self, prompt: str) -> str:
+        config = self.settings.get("ollama", {})
+        base = str(config.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
+        payload = json.dumps({
+            "model": config.get("model", "llama3.2"),
+            "prompt": prompt,
+            "stream": False,
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=float(config.get("timeout", 120))) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        text = str(data.get("response", "")).strip()
+        if not text:
+            raise RuntimeError("Ollama returned an empty response. Is the model pulled?")
+        return text
+
+    def ai_prompt_for_scene(self, narration: str) -> tuple[str, str]:
+        prompt = (
+            "You help faceless YouTube/TikTok/audiobook producers.\n"
+            "Given scene narration, write TWO prompts.\n"
+            "Return exactly this format (no markdown):\n"
+            "KLING: <one cinematic video prompt, 1-2 sentences>\n"
+            "IMAGE: <one still/thumbnail image prompt, 1-2 sentences>\n\n"
+            f"Narration:\n{narration[:1200]}"
+        )
+        raw = self.ollama_generate(prompt)
+        kling, image = "", ""
+        for line in raw.splitlines():
+            upper = line.upper()
+            if upper.startswith("KLING:"):
+                kling = line.split(":", 1)[1].strip()
+            elif upper.startswith("IMAGE:"):
+                image = line.split(":", 1)[1].strip()
+        if not kling and not image:
+            kling = raw.strip()
+        return kling, image
+
+    def ai_fill_selected_prompts(self) -> None:
+        self.capture_selected_scene()
+        if self.selected_scene_index is None:
+            messagebox.showwarning(APP_NAME, "Select a scene first.")
+            return
+        index = self.selected_scene_index
+        narration = self.scenes[index].get("narration", "")
+        if not clean_text(narration):
+            messagebox.showwarning(APP_NAME, "Scene has no narration text.")
+            return
+        self.status.configure(text="Asking Ollama for prompts…")
+
+        def worker() -> None:
+            try:
+                kling, image = self.ai_prompt_for_scene(narration)
+                def apply() -> None:
+                    self.scenes[index]["kling_prompt"] = kling
+                    self.scenes[index]["image_prompt"] = image
+                    if self.selected_scene_index == index:
+                        self.kling_prompt.delete("1.0", "end")
+                        self.kling_prompt.insert("1.0", kling)
+                        self.image_prompt.delete("1.0", "end")
+                        self.image_prompt.insert("1.0", image)
+                    self.save_project()
+                    self.status.configure(text="AI prompts filled")
+                self.after(0, apply)
+            except Exception as exc:
+                self.after(0, lambda: messagebox.showerror("Ollama", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def ai_fill_all_prompts(self) -> None:
+        self.capture_selected_scene()
+        targets = [i for i, s in enumerate(self.scenes) if clean_text(s.get("narration", ""))]
+        if not targets:
+            messagebox.showwarning(APP_NAME, "No scenes with narration.")
+            return
+        if not messagebox.askyesno(APP_NAME, f"Generate Kling + image prompts for {len(targets)} scenes with Ollama?"):
+            return
+        self.status.configure(text="Ollama: filling scene prompts…")
+
+        def worker() -> None:
+            errors = []
+            for i in targets:
+                try:
+                    kling, image = self.ai_prompt_for_scene(self.scenes[i].get("narration", ""))
+                    self.scenes[i]["kling_prompt"] = kling
+                    self.scenes[i]["image_prompt"] = image
+                except Exception as exc:
+                    errors.append(f"Scene {i+1}: {exc}")
+                    break
+            def done() -> None:
+                self.save_project()
+                if self.selected_scene_index is not None:
+                    self.select_scene(self.selected_scene_index)
+                if errors:
+                    messagebox.showerror("Ollama", "\n".join(errors))
+                else:
+                    self.status.configure(text=f"AI prompts filled for {len(targets)} scenes")
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def open_voice_folder(self) -> None:
         if not self.current_project_path:

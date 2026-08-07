@@ -163,9 +163,11 @@ class KokoroNarrationProvider:
         with self.log_file.open("a", encoding="utf-8") as log: log.write(record)
 
 
-class VibeVoiceNarrationProvider:
-    def __init__(self, config: dict, log_file: Path):
-        self.config, self.log_file, self.cancelled = config, log_file, False
+class OpenAICompatibleNarrationProvider:
+    """OpenAI /v1/audio/speech client used by VibeVoice and optional clone servers."""
+
+    def __init__(self, config: dict, log_file: Path, label: str = "TTS"):
+        self.config, self.log_file, self.cancelled, self.label = config, log_file, False, label
 
     def cancel(self) -> None:
         self.cancelled = True
@@ -180,16 +182,28 @@ class VibeVoiceNarrationProvider:
         temporary = output.with_name(output.stem + ".tmp.wav")
         temporary.unlink(missing_ok=True)
         base_url = str(self.config.get("base_url", "http://127.0.0.1:8880")).rstrip("/")
-        payload = json.dumps({
+        body = {
             "model": self.config.get("model", "vibevoice-realtime-0.5b"),
             "input": text,
-            "voice": voice,
+            "voice": voice if voice and voice != "reference" else self.config.get("voice", "alloy"),
             "response_format": "wav",
             "speed": speed,
-        }).encode("utf-8")
-        request = urllib.request.Request(f"{base_url}/v1/audio/speech", data=payload, headers={"Content-Type": "application/json", "Accept": "audio/wav"})
+        }
+        # ponytail: reference_audio for clone servers that accept a sample path/base64; ignored by plain OpenAI TTS
+        reference = Path(str(self.config.get("reference_wav", "") or ""))
+        if reference.is_file():
+            import base64
+            body["voice"] = "reference" if voice in {"", "reference"} else voice
+            body["reference_audio"] = base64.b64encode(reference.read_bytes()).decode("ascii")
+            body["reference_wav"] = str(reference)
+        payload = json.dumps(body).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "audio/wav"}
+        api_key = str(self.config.get("api_key", "") or "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(f"{base_url}/v1/audio/speech", data=payload, headers=headers)
         if on_event:
-            on_event({"event": "stage", "stage": "generating_with_vibevoice"})
+            on_event({"event": "stage", "stage": f"generating_with_{self.label.lower().replace(' ', '_')}"})
         try:
             with urllib.request.urlopen(request, timeout=float(self.config.get("timeout", 300))) as response:
                 temporary.write_bytes(response.read())
@@ -198,9 +212,9 @@ class VibeVoiceNarrationProvider:
             return NarrationResult(True, output=str(output), duration=info["duration"], file_size=info["file_size"], sample_rate=info["sample_rate"], channels=info["channels"], exit_code=0, elapsed=time.monotonic()-started)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")
-            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"VibeVoice HTTP {exc.code}: {detail}")
+            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"{self.label} HTTP {exc.code}: {detail}")
         except Exception as exc:
-            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"VibeVoice request failed: {exc}")
+            return NarrationResult(False, elapsed=time.monotonic()-started, error=f"{self.label} request failed: {exc}")
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -213,6 +227,16 @@ class VibeVoiceNarrationProvider:
             if self.cancelled:
                 break
         return results
+
+
+class VibeVoiceNarrationProvider(OpenAICompatibleNarrationProvider):
+    def __init__(self, config: dict, log_file: Path):
+        super().__init__(config, log_file, label="VibeVoice")
+
+
+class CloneNarrationProvider(OpenAICompatibleNarrationProvider):
+    def __init__(self, config: dict, log_file: Path):
+        super().__init__(config, log_file, label="Clone")
 
 
 def normalize_wav(path: Path, target_dbfs: float = -19.0, peak_dbfs: float = -1.0) -> None:

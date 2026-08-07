@@ -2,8 +2,12 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.1 - Workflow polish
+## Version 0.7.2 - Audiobook & shorts workflow
 
+- Full English Kokoro voice catalogue with quality grades
+- Optional Clone engine via OpenAI-compatible `/v1/audio/speech` + reference WAV
+- Ollama AI assist for Kling and image prompts
+- Export validation, WAV copies for DaVinci, and import README
 - Project, script and scene management
 - Local Kokoro narration generation
 - Optional VibeVoice Realtime 0.5B narration through a local OpenAI-compatible server

@@ -63,6 +63,18 @@ def default_settings() -> dict:
             "voice": "nova",
             "timeout": 300,
         },
+        "clone": {
+            "base_url": "http://127.0.0.1:8880",
+            "model": "tts-1",
+            "voice": "alloy",
+            "reference_wav": "",
+            "timeout": 300,
+        },
+        "ollama": {
+            "base_url": "http://127.0.0.1:11434",
+            "model": "llama3.2",
+            "timeout": 120,
+        },
         "comfyui": {
             "base_url": "http://127.0.0.1:8188",
             "workflow_file": "",
