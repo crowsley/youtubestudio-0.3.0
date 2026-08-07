@@ -168,7 +168,12 @@ class NarrationTests(unittest.TestCase):
 
     def test_stale_audio_path_recovery(self):
         from app import Studio
-        owner = SimpleNamespace(scenes=[{"audioStatus": "Complete", "audioPath": "Z:/missing.wav"}], project_narration={"narrationStatus": "Complete", "combinedNarrationPath": "Z:/missing-all.wav"})
+        owner = SimpleNamespace(
+            scenes=[{"audioStatus": "Complete", "audioPath": "Z:/missing.wav"}],
+            project_narration={"narrationStatus": "Complete", "combinedNarrationPath": "Z:/missing-all.wav"},
+            current_project_path=None,
+        )
+        owner.migrate_audio_path = lambda value: Studio.migrate_audio_path(owner, value)
         Studio.repair_audio_state(owner)
         self.assertEqual(owner.scenes[0]["audioStatus"], "Not generated")
         self.assertEqual(owner.project_narration["narrationStatus"], "Not generated")
