@@ -1299,14 +1299,69 @@ class Studio(ctk.CTk):
         migrated.setdefault("audioError", "")
         return migrated
 
+    def migrate_audio_path(self, value: str) -> str:
+        if not value:
+            return ""
+        text = str(value)
+        legacy = str(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YouTube AI Studio")
+        current = str(DATA_DIR)
+        if text.casefold().startswith(legacy.casefold()):
+            text = current + text[len(legacy):]
+        if self.current_project_path:
+            name = Path(text).name
+            if name.startswith("scene-") and name.endswith(".wav"):
+                candidate = self.current_project_path / "audio" / "scenes" / name
+                if candidate.is_file():
+                    return str(candidate)
+            if name == "narration.wav":
+                candidate = self.current_project_path / "audio" / "narration.wav"
+                if candidate.is_file():
+                    return str(candidate)
+        return text
+
     def repair_audio_state(self) -> None:
-        for scene in self.scenes:
+        for index, scene in enumerate(self.scenes):
+            raw = scene.get("audioPath", "")
+            if raw:
+                scene["audioPath"] = self.migrate_audio_path(raw)
             path = Path(scene.get("audioPath", "")) if scene.get("audioPath") else None
-            if scene.get("audioStatus") == "Complete" and (not path or not path.is_file()):
+            if not path or not path.is_file():
+                # Relink from the standard scene file name if present.
+                candidate = (self.current_project_path / "audio" / "scenes" / f"scene-{index+1:03d}.wav") if self.current_project_path else None
+                if candidate and candidate.is_file():
+                    path = candidate
+                    scene["audioPath"] = str(candidate)
+            if path and path.is_file():
+                try:
+                    info = validate_wav(path)
+                    scene["audioStatus"] = "Complete"
+                    scene["audioDuration"] = info["duration"]
+                    scene["audioFileSize"] = info["file_size"]
+                    scene["audioError"] = ""
+                except ValueError:
+                    scene["audioStatus"] = "Not generated"
+                    scene["audioError"] = "Narration file is incomplete or corrupt — regenerate this scene"
+            elif scene.get("audioStatus") in {"Complete", "Queued"}:
                 scene["audioStatus"] = "Not generated"
                 scene["audioError"] = "Referenced narration file is missing"
+
+        combined = self.project_narration.get("combinedNarrationPath", "")
+        if combined:
+            self.project_narration["combinedNarrationPath"] = self.migrate_audio_path(combined)
         path = Path(self.project_narration.get("combinedNarrationPath", "")) if self.project_narration.get("combinedNarrationPath") else None
-        if self.project_narration.get("narrationStatus") == "Complete" and (not path or not path.is_file()):
+        if self.current_project_path:
+            local = self.current_project_path / "audio" / "narration.wav"
+            if local.is_file():
+                path = local
+                self.project_narration["combinedNarrationPath"] = str(local)
+        if path and path.is_file():
+            try:
+                info = validate_wav(path)
+                self.project_narration["narrationStatus"] = "Complete"
+                self.project_narration["combinedNarrationDuration"] = info["duration"]
+            except ValueError:
+                self.project_narration["narrationStatus"] = "Not generated"
+        else:
             self.project_narration["narrationStatus"] = "Not generated"
 
     def narration_summary(self) -> str:
@@ -1372,8 +1427,15 @@ class Studio(ctk.CTk):
         self.image_prompt.insert("1.0", scene.get("image_prompt", ""))
         self.voice_badge.configure(text=scene.get("audioStatus", "Not generated"))
         self.update_scene_estimate()
-        if scene.get("audioPath") and Path(scene["audioPath"]).is_file():
-            self.load_audio(Path(scene["audioPath"]))
+        audio_path = scene.get("audioPath") or ""
+        if audio_path and Path(audio_path).is_file():
+            try:
+                validate_wav(Path(audio_path))
+                self.load_audio(Path(audio_path), quiet=True)
+            except Exception:
+                self.audio_details.configure(text="Scene audio missing or invalid — regenerate")
+        else:
+            self.audio_details.configure(text="No audio loaded")
 
     def clear_scene_fields(self) -> None:
         for widget in [self.scene_narration, self.kling_prompt, self.image_prompt]:
@@ -1661,7 +1723,17 @@ class Studio(ctk.CTk):
         self.start_voice_generation([], preview_text=text[:500])
 
     def generate_full_narration(self) -> None:
-        if not self.validate_voice_request(list(range(len(self.scenes)))): return
+        if not self.validate_voice_request(list(range(len(self.scenes)))):
+            return
+        complete = [i for i, scene in enumerate(self.scenes) if scene.get("audioStatus") == "Complete" and Path(scene.get("audioPath", "")).is_file()]
+        missing = len(self.scenes) - len(complete)
+        if missing:
+            messagebox.showwarning(
+                APP_NAME,
+                f"{missing} of {len(self.scenes)} scenes are not ready.\n\n"
+                "Click Generate all first. Full narration only stitches completed scene WAVs into one file.",
+            )
+            return
         self.start_voice_generation([], combine=True)
 
     def finish_combination(self, info: dict) -> None:
@@ -1684,32 +1756,55 @@ class Studio(ctk.CTk):
         if path and path.exists() and messagebox.askyesno(APP_NAME, f"Delete {path.name}?"):
             path.unlink(); scene.update({"audioPath": "", "audioStatus": "Not generated", "audioDuration": 0, "audioFileSize": 0}); self.save_project()
 
-    def load_audio(self, path: Path, autoplay: bool = False) -> None:
+    def load_audio(self, path: Path, autoplay: bool = False, quiet: bool = False) -> None:
         try:
-            info = validate_wav(path); self.audio_player.load(path); self.audio_seek.configure(to=max(1, info["duration"])); self.audio_details.configure(text=f"{path.name} — {info['duration']:.2f}s — {info['file_size']} bytes")
-            if autoplay: self.audio_player.play()
-        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+            info = validate_wav(path)
+            self.audio_player.load(path)
+            self.audio_seek.configure(to=max(1, info["duration"]))
+            self.audio_details.configure(text=f"{path.name} — {info['duration']:.2f}s — {info['file_size']} bytes")
+            if autoplay:
+                self.audio_player.play()
+        except Exception as exc:
+            self.audio_details.configure(text="No playable audio")
+            if not quiet:
+                messagebox.showerror("Audio playback", str(exc))
 
     def selected_audio_path(self) -> Path | None:
-        if self.selected_scene_index is not None and self.scenes[self.selected_scene_index].get("audioPath"): return Path(self.scenes[self.selected_scene_index]["audioPath"])
-        if self.project_narration.get("combinedNarrationPath"): return Path(self.project_narration["combinedNarrationPath"])
+        if self.selected_scene_index is not None and self.scenes[self.selected_scene_index].get("audioPath"):
+            return Path(self.scenes[self.selected_scene_index]["audioPath"])
+        if self.project_narration.get("combinedNarrationPath"):
+            return Path(self.project_narration["combinedNarrationPath"])
         return None
 
     def play_audio(self) -> None:
         try:
             if not self.audio_player.path:
                 path = self.selected_audio_path()
-                if not path: raise ValueError("No generated audio is selected")
+                if not path:
+                    raise ValueError("No generated audio is selected. Generate scenes first, then use Full narration.")
                 self.load_audio(path)
-            self.audio_player.play(); self.update_audio_position()
-        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+            if not self.audio_player.path:
+                return
+            self.audio_player.play()
+            self.update_audio_position()
+        except Exception as exc:
+            messagebox.showerror("Audio playback", str(exc))
     def pause_audio(self) -> None:
-        try: self.audio_player.pause()
-        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
+        try:
+            if self.audio_player.path:
+                self.audio_player.pause()
+        except Exception as exc:
+            messagebox.showerror("Audio playback", str(exc))
     def stop_audio(self) -> None:
-        try: self.audio_player.stop(); self.audio_seek.set(0)
-        except Exception as exc: messagebox.showerror("Audio playback", str(exc))
-    def replay_audio(self) -> None: self.stop_audio(); self.play_audio()
+        try:
+            if self.audio_player.path:
+                self.audio_player.stop()
+                self.audio_seek.set(0)
+        except Exception as exc:
+            messagebox.showerror("Audio playback", str(exc))
+    def replay_audio(self) -> None:
+        self.stop_audio()
+        self.play_audio()
     def seek_audio(self, seconds: float) -> None:
         if self.audio_player.path:
             try: self.audio_player.seek(int(float(seconds)*1000)); self.audio_player.play()

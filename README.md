@@ -2,8 +2,11 @@
 
 Local Windows production workspace for faceless and AI-assisted YouTube videos.
 
-## Version 0.7.3 - Mic sample + guided voice tab
+## Version 0.7.4 - Recover old narration paths
 
+- Relink scene/full narration after YouTube AI Studio → AtoZ rename
+- Validate existing WAVs on open; quieter playback when a file is missing
+- Full narration warns if scenes are not complete yet
 - Record microphone samples for voice cloning on the Voice tab
 - Quick-guide steps that change with Kokoro / VibeVoice / Clone
 - Browse WAV, play sample, and one-click Use for clone
